@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "survey-orchestrator"
+version = "0.1.0"
+description = "Multi-agent survey completion orchestrator"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "tenacity>=8.0",
+]
+
+[project.scripts]
+survey-orch = "survey_orchestrator.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
+[tool.setuptools.packages.find]
+include = ["survey_orchestrator*"]

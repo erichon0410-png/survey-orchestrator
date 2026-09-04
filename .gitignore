@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Local configuration overrides & secrets
+.env
+*.local.yaml
+*.local.yml
+config/survey_config.yaml.local
+
+# Internal staging, probes, and scratch files
+.scratch_probe/
+.patch-stage/
+
+# OCR model data
+*.traineddata
+
+# Operational logs, reports, and runtime outputs (preserve directories via .gitkeep)
+/logs/*
+!/logs/.gitkeep
+/output/*
+!/output/.gitkeep
+/reports/*
+!/reports/.gitkeep
+!/reports/inbox/
+!/reports/processed/
+/reports/inbox/*
+!/reports/inbox/.gitkeep
+/reports/processed/*
+!/reports/processed/.gitkeep

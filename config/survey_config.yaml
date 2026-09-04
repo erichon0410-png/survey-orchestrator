@@ -1,0 +1,95 @@
+# Survey Orchestrator Configuration — Survey Completion (Farming)
+# Agents navigate to reward platforms and complete surveys as a persona.
+# Per-container platform/account assignments are authoritative for this session:
+# container NN <-> CDP port 30NN. Sites stay pre-loaded; agents never re-navigate onboarding.
+
+agents:
+  - name: agent-03
+    container: SurveyCompleter-gmail-03
+    port: 3013
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+    persona: personas/mei_lin_chen.yaml
+    platforms: [opinionoutpost]
+    account:
+      email: "YOUR_EMAIL_HERE"
+      password: "YOUR_PASSWORD_HERE"
+      status: pending-login
+
+  - name: agent-04
+    container: SurveyCompleter-gmail-04
+    port: 3014
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+    persona: personas/mei_lin_chen.yaml
+    platforms: [swagbucks]
+    account:
+      email: "YOUR_EMAIL_HERE"
+      password: "YOUR_PASSWORD_HERE"
+      status: pending-login
+
+  - name: agent-05
+    container: SurveyCompleter-gmail-05
+    port: 3015
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+    persona: personas/mei_lin_chen.yaml
+    platforms: [primeopinion]
+    account:
+      email: "YOUR_EMAIL_HERE"
+      password: "YOUR_PASSWORD_HERE"
+      status: pending-login
+
+  - name: agent-06
+    container: SurveyCompleter-gmail-06
+    port: 3016
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+    persona: personas/mei_lin_chen.yaml
+    platforms: [surveyjunkie]
+    account:
+      email: "YOUR_EMAIL_HERE"
+      password: "YOUR_PASSWORD_HERE"
+      status: pending-login
+
+  - name: agent-07
+    container: SurveyCompleter-gmail-07
+    port: 3017
+    model: gpt-5.6-luna
+    reasoning_effort: medium
+    persona: personas/mei_lin_chen.yaml
+    platforms: [swagbucks]
+    account:
+      email: "YOUR_EMAIL_HERE"
+      password: "YOUR_PASSWORD_HERE"
+      status: pending-login
+
+execution:
+  max_concurrent: 4
+  timeout_seconds: 1800
+  retry_attempts: 1
+  prompt_template: prompts/survey_agent_prompt.txt
+  output_dir: output
+  log_dir: logs
+
+platforms:
+  swagbucks:
+    url: https://www.swagbucks.com
+    signup_email_domain: gmail.com
+    notes: "Complete surveys for SB points. Record payout per survey."
+
+  acop:
+    url: https://www.acop.com   # moved from acopinion.com (NXDOMAIN as of 2026-09-03); login at /login/
+    notes: "American Consumer Opinion (Dynata). Container 05 task completed 2026-08-27."
+
+  opinionoutpost:
+    url: https://www.opinionoutpost.com
+    notes: "Container 03. Dynata panel (f/k/a Survey Sampling International); Cognito auth. Pw reset via email-code flow 2026-08-27; login verified."
+
+  surveyjunkie:
+    url: https://www.surveyjunkie.com
+    notes: "Container 06. Account was Google-OAuth created; password set via SJ create-password email flow."
+
+  primeopinion:
+    url: https://app.primeopinion.com/
+    notes: "Container 05 / port 3015. Switched from ACOP on 2026-09-04 per operator. Sign in with Google using account email."
