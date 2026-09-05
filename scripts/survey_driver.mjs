@@ -36,6 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 // ---------- arg / env parsing ----------
 function parseArgs(argv) {
@@ -71,6 +72,61 @@ const PROCESSED = path.join(WS, "reports", "processed");
 const STATUS_JSONL = path.join(LOGS_DIR, `agent_${PORT}_status.jsonl`);
 const AGENT_LOG = path.join(LOGS_DIR, `agent_${PORT}.log`);
 const MARKER = args.marker || `codex exec bound port ${PORT}`;
+
+// ---------- earnings rate table (from config/earnings_rates.yaml, inlined for no-dep) ----------
+const RATE_TABLE = {
+  swagbucks:      { conversion: "points_to_usd", rate: 0.01, unit: "SB" },
+  surveyjunkie:   { conversion: "points_to_usd", rate: 0.01, unit: "points" },
+  opinionoutpost: { conversion: "platform_displayed_usd" },
+  primeopinion:   { conversion: "platform_displayed_usd" },
+};
+
+const PORT_TO_PLATFORM = {
+  3013: "opinionoutpost",
+  3014: "swagbucks",
+  3015: "primeopinion",
+  3016: "surveyjunkie",
+  3017: "swagbucks",
+};
+
+/**
+ * Validate a target_reached marker file. Returns { valid, reason }.
+ * A marker is valid iff:
+ *   - it has total_usd (number > 0)
+ *   - for points_to_usd platforms: total_raw exists AND total_raw * rate ≈ total_usd (within $0.02)
+ *   - for platform_displayed_usd platforms: total_usd is present (we trust platform display)
+ */
+function validateTargetMarker(markerPath) {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+  } catch (e) {
+    return { valid: false, reason: `cannot parse marker: ${e.message}` };
+  }
+  if (typeof data.total_usd !== "number" || data.total_usd <= 0) {
+    return { valid: false, reason: `total_usd missing or <= 0: ${data.total_usd}` };
+  }
+  const platform = PORT_TO_PLATFORM[data.port || PORT];
+  if (!platform) {
+    return { valid: false, reason: `unknown port ${data.port}` };
+  }
+  const rateInfo = RATE_TABLE[platform];
+  if (!rateInfo) {
+    return { valid: false, reason: `no rate entry for platform ${platform}` };
+  }
+  if (rateInfo.conversion === "points_to_usd") {
+    if (typeof data.total_raw !== "number" || data.total_raw <= 0) {
+      return { valid: false, reason: `points_to_usd platform but total_raw missing or <= 0` };
+    }
+    const expectedUsd = Math.round(data.total_raw * rateInfo.rate * 100) / 100;
+    const diff = Math.abs(expectedUsd - data.total_usd);
+    if (diff > 0.02) {
+      return { valid: false, reason: `total_usd ${data.total_usd} != total_raw ${data.total_raw} * ${rateInfo.rate} = ${expectedUsd} (diff $${diff.toFixed(2)})` };
+    }
+  }
+  // platform_displayed_usd: total_usd present is sufficient
+  return { valid: true, reason: "ok" };
+}
 
 // In-character nudge: pushes the model to keep driving instead of stopping. Deliberately does NOT
 // re-introduce refusal-trigger framing (no "paid/earnings/on someone's behalf"); it leans on the
@@ -117,22 +173,65 @@ function findTargetMarker(dir, re) {
   }
   return false;
 }
+/** Like findTargetMarker but returns the path to the first matching file, or null. */
+function findTargetMarkerPath(dir, re) {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return null; }
+  for (const name of entries) {
+    const p = path.join(dir, name);
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    if (st.isDirectory()) {
+      const sub = findTargetMarkerPath(p, re);
+      if (sub) return sub;
+    } else if (re.test(name)) return p;
+  }
+  return null;
+}
 function targetReached() {
   const re = new RegExp(`^${PORT}_target_reached_.*\\.json$`);
-  return findTargetMarker(INBOX, re) || findTargetMarker(PROCESSED, re);
+  // Find any matching marker file and validate it
+  const markerFile = findTargetMarkerPath(INBOX, re) || findTargetMarkerPath(PROCESSED, re);
+  if (!markerFile) return false;
+  const result = validateTargetMarker(markerFile);
+  if (!result.valid) {
+    log("warn", "target_reached marker FAILED validation — treating as not reached (fail-closed)", { file: markerFile, reason: result.reason });
+    // Rename the invalid marker so the driver doesn't loop on it
+    try {
+      const invalidName = markerFile + ".invalid";
+      fs.renameSync(markerFile, invalidName);
+      log("info", "renamed invalid marker", { from: markerFile, to: invalidName });
+    } catch (e) { log("warn", "could not rename invalid marker", { err: String(e) }); }
+    return false;
+  }
+  return true;
 }
 
 // ---------- thread id extraction from the JSONL agent log ----------
-function extractThreadId(file) {
-  let text;
-  try { text = fs.readFileSync(file, "utf-8"); } catch { return null; }
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t.startsWith("{")) continue;
-    try {
-      const o = JSON.parse(t);
-      if (o && o.type === "thread.started" && typeof o.thread_id === "string") return o.thread_id;
-    } catch {}
+export function extractThreadId(file = AGENT_LOG) {
+  if (!file || !fs.existsSync(file)) return null;
+  let fd = null;
+  try {
+    // Thread ID appears within the first 8KB of the log; avoid reading 50MB+ into RAM
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(8192);
+    const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+    fs.closeSync(fd);
+    fd = null;
+    const head = buf.toString("utf-8", 0, bytesRead);
+    const lines = head.split("\n");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.thread_id) return parsed.thread_id;
+      } catch {}
+    }
+  } catch {}
+  finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
   }
   return null;
 }
@@ -284,4 +383,9 @@ async function main() {
   }
 }
 
-main().catch((e) => { log("error", "main() threw", { err: String(e?.stack || e) }); try { finishClean(3); } catch {} });
+const __filename = fileURLToPath(import.meta.url);
+const isCLI = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
+
+if (isCLI) {
+  main().catch((e) => { log("error", "main() threw", { err: String(e?.stack || e) }); try { finishClean(3); } catch {} });
+}
