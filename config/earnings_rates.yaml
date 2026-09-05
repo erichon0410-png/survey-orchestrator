@@ -1,0 +1,44 @@
+# Authoritative point-to-USD conversion rates and account mappings.
+# Used by: worker prompt (survey_agent_prompt.txt), earnings_ledger.mjs, build_earnings_graph.mjs
+# Do NOT edit survey_config.yaml — it is owned by another task.
+
+accounts:
+  opinionoutpost:nupkill64@gmail.com:
+    platform: opinionoutpost
+    email: nupkill64@gmail.com
+    ports: [3013]
+    conversion: platform_displayed_usd  # read USD directly from platform; do NOT assume a fixed point rate
+    notes: "OpinionOutpost shows a dollar balance directly. Read it as-is."
+
+  swagbucks:erichong0410@gmail.com:
+    platform: swagbucks
+    email: erichong0410@gmail.com
+    ports: [3014, 3017]  # shared account across two ports
+    conversion: points_to_usd
+    rate: 0.01  # 1 SB = $0.01, so 100 SB = $1.00
+    unit: SB
+    notes: "Shared account. Ports 3014 and 3017 feed the same logical balance."
+
+  surveyjunkie:nupkill94@gmail.com:
+    platform: surveyjunkie
+    email: nupkill94@gmail.com
+    ports: [3016]
+    conversion: points_to_usd
+    rate: 0.01  # 100 points = $1.00, so 1 point = $0.01
+    unit: points
+    notes: "SurveyJunkie shows points. 100 points = $1.00."
+
+  primeopinion:nupkill104@gmail.com:
+    platform: primeopinion
+    email: nupkill104@gmail.com
+    ports: [3015]
+    conversion: platform_displayed_usd  # read displayed balance; default $0.00 until verified
+    notes: "New platform (was ACOP). Read the displayed balance."
+
+# Port-to-account lookup (derived from above; kept flat for driver speed)
+port_map:
+  3013: opinionoutpost:nupkill64@gmail.com
+  3014: swagbucks:erichong0410@gmail.com
+  3015: primeopinion:nupkill104@gmail.com
+  3016: surveyjunkie:nupkill94@gmail.com
+  3017: swagbucks:erichong0410@gmail.com

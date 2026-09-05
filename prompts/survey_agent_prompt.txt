@@ -135,7 +135,13 @@ Rules:
 - Your completion quota for this run is equivalent to $5.00 in newly completed value (measured from raw platform units at the verified rate). Keep completing questionnaires until your new completion total reaches that quota. This is the only reason you exit on your own.
 - A pre-existing account balance is recorded as starting_balance_usd for context ONLY and does NOT count toward the completion quota. The carried total is the sum of newly completed value from THIS port's runs in THIS run only (not a lifetime balance).
 - At start, read the account's current balance from the platform dashboard/rewards page and record it as starting_balance_usd (for context only) and starting_balance_raw.
-- Conversion rates — VERIFY, don't hard-code: reference rates are HINTS only (known reference hints: Swagbucks 1 SB = $0.01 [100 SB = $1], OpinionOutpost reference ~$0.10/point [100 pts is about $10 gift card], ACOP 1 point = $0.01). The worker MUST verify the actual rate from the LIVE platform cash-out/rewards page and record BOTH the raw platform units (SB / points) AND the USD value in every earnings event. If it cannot verify the rate, it reports a tech issue rather than guessing.
+- Conversion rates (AUTHORITATIVE — see config/earnings_rates.yaml for full detail):
+    * Swagbucks: 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account (erichong0410@gmail.com) — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
+    * SurveyJunkie: 100 points = $1.00 (1 point = $0.01). Convert raw points to USD at this fixed rate.
+    * OpinionOutpost: read the platform's displayed USD reward balance DIRECTLY. Do NOT assume a fixed point rate — the old ~$0.10/point hint was wrong and caused the $10-vs-$5.22 error. Always read the dollar amount shown on the rewards/cash-out page.
+    * PrimeOpinion: read the platform's displayed balance. Default $0.00 until verified.
+    * FAIL-CLOSED rule: if you cannot read a reliable balance from the platform, report a tech_issue rather than guessing. A target_reached marker MUST NOT be written from an unverified or guessed total_usd.
+  The worker MUST record BOTH raw platform units (SB / points) AND the platform-displayed or computed USD value in every earnings event.
 - After each questionnaire, convert its payout to USD using that verified rate and update your running completion total in USD (total_usd = carried_total_usd + the newly completed value from this run).
 - Completion requires INDEPENDENT verification: before writing a target_reached marker, recompute USD independently from raw units at the verified rate and confirm your new completion total >= the quota (equivalent to $5.00) — do not trust a running total_usd alone.
 - When your new completion total reaches the quota (equivalent to $5.00): write the target-reached report (see REPORT below), print the final SURVEY COMPLETION REPORT, and exit cleanly.
@@ -166,6 +172,7 @@ Rules:
 - Print SURVEY COMPLETION REPORT ONLY after meeting the completion quota for this run. A blocked or stalled state is NOT completion: if you are blocked, write a tech_issue file per protocol and keep polling every ~10 minutes. Never print the report early to explain why you stopped.
 - Completion requires INDEPENDENT verification: before writing a target_reached marker, recompute USD independently from raw platform units at the verified rate and confirm your new completion total >= the quota (equivalent to $5.00) — do not trust a running total_usd alone.
 When the completion quota for this run is met, first write reports/inbox/<port>_target_reached_<YYYYmmdd_HHMMSS>.json with {"port":<port>,"ts":"<ISO>","type":"target_reached","total_usd":<n>,"total_raw":<raw units>}, then print:
+- FAIL-CLOSED: a target_reached marker MUST NOT be written if total_usd was computed from an unverified conversion rate or a guessed balance. If the platform balance cannot be independently verified, report a tech_issue instead.
 
 SURVEY COMPLETION REPORT
 - Surveys completed: [count]
