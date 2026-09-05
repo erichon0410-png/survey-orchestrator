@@ -37,7 +37,6 @@ let lastEarningsSyncTs = 0; // 0 ensures first tick triggers initial sync
 const restarts = new Map(); // port -> [timestamp ms, ...]
 const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
 const targetPorts = new Set(); // target-reached marker found: never restart again
-const loggedTargetPorts = new Set(); // ports already announced as skipped (log once)
 
 // --- helpers ---
 function iso() {
@@ -227,8 +226,7 @@ async function tick() {
           // Still in cooldown period; wait for repair
           continue;
         }
-        // Cooldown elapsed: clear pause and allow 1 resume deployment attempt,
-        // while preserving recent crash history so repeated failures pause again.
+        // Cooldown elapsed: clear pause and allow resume deployment attempt.
         pausedPorts.delete(port);
         const resumeTs = iso();
         appendSupervisorLog({
