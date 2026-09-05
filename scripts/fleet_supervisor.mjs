@@ -9,7 +9,7 @@
 // Restart cap: max 4 restarts per port in any rolling 60-minute window; on the
 // 5th needed restart the port is paused for repair (repair-pending, bounded cooldown),
 // a supervisor_restart_cap line is appended to the agent status stream, and a
-// reports/inbox/<PORT>_restart_cap_<ts>.json file is written. After the cooldown,
+// reports/inbox/<PORT>_restart_cap_active.json file is written. After the cooldown,
 // the hold clears and deployment resumes automatically.
 //
 // Logs: logs/supervisor.log (append-only JSON lines).
@@ -130,7 +130,21 @@ function capPort(port) {
   }
   // 2. inbox file for the orchestrator/watcher to pick up.
   try {
-    const fname = `${port}_restart_cap_${stamp()}.json`;
+    // Remove older restart cap markers for this port to prevent accumulation
+    try {
+      if (fs.existsSync(INBOX)) {
+        const legacyPattern = new RegExp(`^${port}_restart_cap_.*\\.json$`);
+        for (const file of fs.readdirSync(INBOX)) {
+          if (file !== `${port}_restart_cap_active.json` && legacyPattern.test(file)) {
+            try {
+              fs.unlinkSync(path.join(INBOX, file));
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
+    const fname = `${port}_restart_cap_active.json`;
     fs.writeFileSync(
       path.join(INBOX, fname),
       JSON.stringify({
