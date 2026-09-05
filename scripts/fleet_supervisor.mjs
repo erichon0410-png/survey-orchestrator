@@ -18,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { FLEET, deployAgent } from "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
+import { syncEarnings } from "./earnings_sync.mjs";
 
 const ROOT = "/home/erich/workspace/survey-orchestrator";
 const LOGS_DIR = path.join(ROOT, "logs");
@@ -29,8 +30,10 @@ const POLL_MS = 30_000;
 const WINDOW_MS = 60 * 60 * 1000; // rolling 60-minute window
 const MAX_RESTARTS_PER_WINDOW = 4; // 5th needed restart within the window -> cap
 const COOLDOWN_MS = Number(process.env.SUPERVISOR_COOLDOWN_MS) || 5 * 60 * 1000; // bounded cooldown before re-attempting a paused port (default 5 min)
+const DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // daily schedule (24h)
 
 // --- state (in-memory, this process's life) ---
+let lastEarningsSyncTs = 0; // 0 ensures first tick triggers initial sync
 const restarts = new Map(); // port -> [timestamp ms, ...]
 const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
 const targetPorts = new Set(); // target-reached marker found: never restart again
@@ -165,6 +168,29 @@ async function tick() {
   const alivePorts = [];
   const restartedPorts = [];
   try {
+    // --- Daily earnings sync & graph refresh ---
+    const now = Date.now();
+    if (now - lastEarningsSyncTs >= DAILY_SYNC_INTERVAL_MS) {
+      lastEarningsSyncTs = now;
+      try {
+        const syncRes = syncEarnings({ dailyHeartbeat: true });
+        appendSupervisorLog({
+          ts: iso(),
+          action: "daily_sync",
+          markers_processed: syncRes.markersProcessed,
+          heartbeats_appended: syncRes.heartbeatsAppended?.length ?? 0,
+          graph_rebuilt: syncRes.graphRebuilt,
+          note: "daily earnings sync and graph refresh complete",
+        });
+      } catch (e) {
+        appendSupervisorLog({
+          ts: iso(),
+          action: "daily_sync_failed",
+          error: String(e),
+        });
+      }
+    }
+
     const psLines = execSync("ps -eo pid,args", { encoding: "utf8" }).split("\n");
 
     for (const item of [...FLEET].sort((a, b) => a.port - b.port)) {
@@ -179,6 +205,11 @@ async function tick() {
           action: "skipped_target_reached",
           note: "target-reached marker present; never restarting this port",
         });
+        try {
+          syncEarnings();
+        } catch (e) {
+          appendSupervisorLog({ ts: iso(), port, action: "sync_earnings_failed", error: String(e) });
+        }
       }
       if (targetPorts.has(port)) continue;
 
@@ -217,11 +248,9 @@ async function tick() {
         } catch (e) {
           appendSupervisorLog({ ts: resumeTs, port, action: "resume_status_write_failed", error: String(e) });
         }
-        const existingRestarts = (restarts.get(port) ?? []).filter((t) => now - t <= WINDOW_MS);
-        while (existingRestarts.length >= MAX_RESTARTS_PER_WINDOW) {
-          existingRestarts.shift();
-        }
-        restarts.set(port, existingRestarts);
+        // Reset restarts history on resume to give a clean trial deployment
+        // instead of leaving it 1 failure away from an immediate re-cap:
+        restarts.set(port, []);
       }
 
       // Restart cap: max 4 restarts per port in any rolling 60-minute window.
