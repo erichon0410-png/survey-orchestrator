@@ -162,9 +162,23 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
   const testSeenFile = path.join(ROOT, "reports", ".test_sync_seen.json");
   const testMarkerName = "9999_target_reached_20260904_111111.json";
   const testMarkerPath = path.join(testInbox, testMarkerName);
+  const holdDir = path.join(ROOT, "reports", ".test_inbox_hold");
+  const heldMarkers = [];
 
   try {
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
+
+    // Isolate the shared inbox so this test's "exactly 1 marker" contract holds
+    // even when real pending markers are present. Moved aside here, restored in
+    // finally. Without this, a stray *_target_reached_*.json left in reports/inbox
+    // (normal pending work) makes syncEarnings process >1 marker and break the count.
+    fs.mkdirSync(holdDir, { recursive: true });
+    for (const f of fs.readdirSync(testInbox)) {
+      if (f.endsWith(".json") && f !== testMarkerName) {
+        fs.renameSync(path.join(testInbox, f), path.join(holdDir, f));
+        heldMarkers.push(f);
+      }
+    }
 
     // Write synthetic marker with explicit test account
     fs.writeFileSync(
@@ -233,6 +247,12 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
   } finally {
     if (fs.existsSync(testMarkerPath)) fs.unlinkSync(testMarkerPath);
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
+
+    // Restore any pre-existing markers we moved aside, then drop the hold dir.
+    for (const f of heldMarkers) {
+      try { fs.renameSync(path.join(holdDir, f), path.join(testInbox, f)); } catch {}
+    }
+    if (fs.existsSync(holdDir)) fs.rmSync(holdDir, { recursive: true, force: true });
 
     // Clean up test entries from earnings_ledger.jsonl
     const ledgerPath = path.join(ROOT, "reports", "earnings_ledger.jsonl");
