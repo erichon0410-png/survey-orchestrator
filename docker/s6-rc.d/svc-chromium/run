@@ -1,0 +1,36 @@
+#!/usr/bin/with-contenv bash
+
+echo "[svc-chromium] Starting Chromium supervisor service..."
+
+# Prevent labwc from spawning an unmanaged duplicate Chromium instance
+if [ -f "/config/.config/labwc/autostart" ]; then
+  sed -i '/wrapped-chromium/d' /config/.config/labwc/autostart 2>/dev/null || true
+fi
+
+# Wait for Wayland socket to be ready
+echo "[svc-chromium] Waiting for Wayland socket at /config/.XDG/wayland-0..."
+while [ ! -S "/config/.XDG/wayland-0" ]; do
+  sleep 0.5
+done
+echo "[svc-chromium] Wayland socket /config/.XDG/wayland-0 detected."
+
+# Clear stale Singleton locks if Chromium is not running
+if ! pgrep -x chromium >/dev/null 2>&1; then
+  echo "[svc-chromium] Clearing stale Singleton locks..."
+  rm -f /config/.config/chromium/Singleton*
+fi
+
+# Ensure profile directory ownership belongs to abc
+chown -R abc:abc /config/.config/chromium 2>/dev/null || true
+
+# Set runtime environment
+export HOME=/config
+export XDG_RUNTIME_DIR=/config/.XDG
+export WAYLAND_DISPLAY=wayland-0
+export DISPLAY=:1
+
+echo "[svc-chromium] Launching Chromium under user abc (remote-debugging-port=9222)..."
+exec s6-setuidgid abc /usr/bin/wrapped-chromium \
+  --enable-features=UseOzonePlatform \
+  --ozone-platform=wayland \
+  --remote-debugging-port=9222

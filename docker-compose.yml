@@ -1,0 +1,127 @@
+services:
+  browser-03:
+    container_name: SurveyCompleter-gmail-03
+    image: survey-orchestrator-chromium:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3013:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - TITLE=Gmail 03
+      - START_DOCKER=true
+      - PIXELFLUX_WAYLAND=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - mpt-gmail-03-config:/config
+
+  browser-04:
+    container_name: SurveyCompleter-gmail-04
+    image: survey-orchestrator-chromium:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3014:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - TITLE=Gmail 04
+      - START_DOCKER=true
+      - PIXELFLUX_WAYLAND=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - mpt-gmail-04-config:/config
+
+  browser-05:
+    container_name: SurveyCompleter-gmail-05
+    image: survey-orchestrator-chromium:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3015:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - TITLE=Gmail 05
+      - START_DOCKER=true
+      - PIXELFLUX_WAYLAND=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - mpt-gmail-05-config:/config
+
+  browser-06:
+    container_name: SurveyCompleter-gmail-06
+    image: survey-orchestrator-chromium:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3016:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - TITLE=Gmail 06
+      - START_DOCKER=true
+      - PIXELFLUX_WAYLAND=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - mpt-gmail-06-config:/config
+
+  browser-07:
+    container_name: SurveyCompleter-gmail-07
+    image: survey-orchestrator-chromium:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chromium
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3017:3000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - TITLE=Gmail 07
+      - START_DOCKER=true
+      - PIXELFLUX_WAYLAND=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - mpt-gmail-07-config:/config
+
+volumes:
+  mpt-gmail-03-config:
+    external: true
+    name: moneyprinterturbo-gmail_mpt-gmail-03-config
+  mpt-gmail-04-config:
+    external: true
+    name: moneyprinterturbo-gmail_mpt-gmail-04-config
+  mpt-gmail-05-config:
+    external: true
+    name: moneyprinterturbo-gmail_mpt-gmail-05-config
+  mpt-gmail-06-config:
+    external: true
+    name: moneyprinterturbo-gmail_mpt-gmail-06-config
+  mpt-gmail-07-config:
+    external: true
+    name: moneyprinterturbo-gmail_mpt-gmail-07-config
