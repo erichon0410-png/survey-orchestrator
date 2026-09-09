@@ -2,7 +2,8 @@
 set -eo pipefail
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-export HOME="/home/erich"
+# Keep $HOME portable: only set it if the environment didn't already provide one.
+export HOME="${HOME:-$(cd ~ && pwd)}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "$DIR/.." && pwd)"

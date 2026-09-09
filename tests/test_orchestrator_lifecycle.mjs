@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { FLEET, killAgentForPort, killProcessGroup as exportedKillProcessGroup } from "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
+
+const ORCH_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
+const { FLEET, killAgentForPort, killProcessGroup: exportedKillProcessGroup } = await import(ORCH_PATH);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tmpLog = path.join(__dirname, "test_spawn_fd.log");

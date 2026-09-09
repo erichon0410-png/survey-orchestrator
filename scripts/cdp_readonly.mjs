@@ -14,12 +14,15 @@
 // CLI: node scripts/cdp_readonly.mjs <port> [--host 127.0.0.1] [--preferred-hosts a.com,b.com] [--max-text 6000]
 
 import { writeSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 let WebSocket;
 try {
   WebSocket = (await import("ws")).default;
 } catch {
-  WebSocket = (await import("/home/erich/.dsh/profiles/web/node_modules/ws/index.js")).default;
+  // Fallback to the DSH web profile's ws module, resolved from $HOME (portable).
+  WebSocket = (await import(path.join(os.homedir(), ".dsh", "profiles", "web", "node_modules", "ws", "index.js"))).default;
 }
 
 // A target counts as a "real page" only if it is type==="page" with an http(s) url.

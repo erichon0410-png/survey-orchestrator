@@ -16,11 +16,20 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
-import { FLEET, deployAgent, ensureFleetRunning } from "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
 import { syncEarnings } from "./earnings_sync.mjs";
 
-const ROOT = "/home/erich/workspace/survey-orchestrator";
+// Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
+// Override with SURVEY_ROOT if the checkout lives elsewhere.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = process.env.SURVEY_ROOT || path.resolve(__dirname, "..");
+
+// The orchestrator plugin lives under the user's home (~/.dsh/...). Resolve it from
+// $HOME so this works on any machine; override with DSH_ORCHESTRATOR if relocated.
+const ORCH_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
+const { FLEET, deployAgent, ensureFleetRunning } = await import(ORCH_PATH);
 const LOGS_DIR = path.join(ROOT, "logs");
 const INBOX = path.join(ROOT, "reports", "inbox");
 const PROCESSED = path.join(ROOT, "reports", "processed");

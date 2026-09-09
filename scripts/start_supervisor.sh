@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-DIR="/home/erich/workspace/survey-orchestrator"
+# Resolve the repo root from this script's location (<root>/scripts/) so it is portable.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
 SUPERVISOR_PID=$(pgrep -f "scripts/fleet_supervisor.mjs" | head -n 1)

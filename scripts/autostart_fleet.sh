@@ -3,7 +3,8 @@
 # Idempotent + safe to run repeatedly (Startup-folder hook or manually).
 # Sequence: wait for Docker daemon -> ensure survey containers up -> start host supervisor.
 set -u
-DIR="/home/erich/workspace/survey-orchestrator"
+# Resolve the repo root from this script's location (<root>/scripts/) so it is portable.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR" || exit 1
 mkdir -p logs
 LOG="logs/autostart.log"

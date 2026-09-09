@@ -4,4 +4,7 @@ param (
     [string]$Action = "status"
 )
 
-wsl -d Ubuntu bash -c "cd /home/erich/workspace/survey-orchestrator && ./fleet.sh $Action"
+# WSL repo path; override with $env:SURVEY_REPO if the checkout lives elsewhere.
+$Repo = if ($env:SURVEY_REPO) { $env:SURVEY_REPO } else { "/home/erich/workspace/survey-orchestrator" }
+
+wsl -d Ubuntu bash -c "cd '$Repo' && ./fleet.sh $Action"

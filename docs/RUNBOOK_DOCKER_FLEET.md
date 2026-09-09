@@ -10,7 +10,7 @@ To save ~2 GB of system RAM when surveys are not actively running, use the conve
 
 ```bash
 # In WSL:
-cd /home/erich/workspace/survey-orchestrator
+cd ~/workspace/survey-orchestrator   # your repo checkout
 ./fleet.sh stop      # Stops all 5 containers -> instantly releases ~2 GB RAM (sessions 100% safe)
 ./fleet.sh start     # Starts all 5 containers, clears locks, waits for CDP readiness (~3s)
 ./fleet.sh status    # Checks container state, memory footprint, and CDP port responsiveness
@@ -91,16 +91,16 @@ To guarantee the entire Docker Compose fleet turns on every morning at 7:00 AM (
 ### Layer 1: Windows Task Scheduler (`\Survey Fleet Morning Startup`)
 - **Trigger**: Daily at 07:00 AM America/New_York.
 - **Power Policy**: `WakeToRun = True` (wakes the host machine if sleeping/suspended).
-- **Command**: `wsl.exe -d Ubuntu -e bash -lc "/home/erich/workspace/survey-orchestrator/scripts/morning_trigger.sh"`
+- **Command**: `wsl.exe -d Ubuntu -e bash -lc "<WSL repo path>/scripts/morning_trigger.sh"` (point it at your checkout, e.g. `/home/<you>/workspace/survey-orchestrator`)
 
 ### Layer 2: WSL System Cron (`cron.service`)
 - **Schedule**: `0 7 * * *` in user `erich` crontab.
-- **Script**: Invokes [`scripts/morning_trigger.sh`](file:///home/erich/workspace/survey-orchestrator/scripts/morning_trigger.sh).
+- **Script**: Invokes [`scripts/morning_trigger.sh`](../scripts/morning_trigger.sh).
 
-### Layer 3: Unified Entrypoint ([`scripts/morning_trigger.sh`](file:///home/erich/workspace/survey-orchestrator/scripts/morning_trigger.sh))
+### Layer 3: Unified Entrypoint ([`scripts/morning_trigger.sh`](../scripts/morning_trigger.sh))
 - Executes `./fleet.sh start` to spin up `docker compose up -d` and verify all 5 CDP endpoints are online (HTTP 200).
 - Executes `./scripts/start_supervisor.sh` using `setsid` so the supervisor daemon detaches cleanly.
-- Logs full startup telemetry to [`logs/morning_trigger.log`](file:///home/erich/workspace/survey-orchestrator/logs/morning_trigger.log).
+- Logs full startup telemetry to [`logs/morning_trigger.log`](../logs/morning_trigger.log).
 
 ### Layer 4: Self-Healing Orchestrator Code (`orchestrator.js` & `fleet_supervisor.mjs`)
 - `ensureFleetRunning()` is called at the beginning of `deployAll()`, `checkFleetHealth()`, and `fleet_supervisor.mjs:tick()`.

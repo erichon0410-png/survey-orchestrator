@@ -74,7 +74,7 @@ export function latestBalances() {
 
 /**
  * Get the chronological time series for a specific account.
- * @param {string} account - e.g. "swagbucks:erichong0410@gmail.com"
+ * @param {string} account - e.g. "swagbucks:user02@example.com"
  * @returns {Array<{ts: string, balance_usd: number, points_raw: number|null, note: string}>}
  */
 export function seriesFor(account) {

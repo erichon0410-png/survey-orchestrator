@@ -35,13 +35,13 @@ as a consistent persona.
 To clone and set up the orchestrator on another computer (under WSL or Linux):
 
 ```bash
-# Clone the repository
-git clone https://github.com/erichon0410-png/survey-orchestrator.git /home/erich/workspace/survey-orchestrator
-cd /home/erich/workspace/survey-orchestrator
+# Clone the repository (adjust the target dir to wherever you keep checkouts)
+git clone https://github.com/erichon0410-png/survey-orchestrator.git ~/workspace/survey-orchestrator
+cd ~/workspace/survey-orchestrator
 
 # (Or using GitHub CLI if authenticated)
-gh repo clone erichon0410-png/survey-orchestrator /home/erich/workspace/survey-orchestrator
-cd /home/erich/workspace/survey-orchestrator
+gh repo clone erichon0410-png/survey-orchestrator ~/workspace/survey-orchestrator
+cd ~/workspace/survey-orchestrator
 
 # Install dependencies in editable mode
 pip install -e .
@@ -50,7 +50,7 @@ pip install -e .
 
 ## Account Configuration (`config/survey_config.yaml`)
 
-Before launching agents, you must populate your account credentials in [`config/survey_config.yaml`](file:///home/erich/workspace/survey-orchestrator/config/survey_config.yaml).
+Before launching agents, you must populate your account credentials in [`config/survey_config.yaml`](./config/survey_config.example.yaml). Copy the committed template first — `cp config/survey_config.example.yaml config/survey_config.yaml` — then edit that copy (it is git-ignored, so real credentials stay local).
 
 ### Step-by-Step Setup
 

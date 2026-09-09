@@ -1,8 +1,12 @@
+import os from "node:os";
+import path from "node:path";
+
 let WebSocket;
 try {
   WebSocket = (await import("ws")).default;
 } catch {
-  WebSocket = (await import("/home/erich/.dsh/profiles/web/node_modules/ws/index.js")).default;
+  // Fallback to the DSH web profile's ws module, resolved from $HOME (portable).
+  WebSocket = (await import(path.join(os.homedir(), ".dsh", "profiles", "web", "node_modules", "ws", "index.js"))).default;
 }
 
 const port = process.argv[2] || "3016";

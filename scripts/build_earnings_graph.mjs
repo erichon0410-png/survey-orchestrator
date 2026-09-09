@@ -135,10 +135,10 @@ function generateHTML(entries, seriesData, chart = {}) {
   const displayName = (acct) => acct.split(":")[0];
 
   const COLORS = {
-    "opinionoutpost:nupkill64@gmail.com": "#4CAF50",
-    "swagbucks:erichong0410@gmail.com": "#2196F3",
-    "surveyjunkie:nupkill94@gmail.com": "#FF9800",
-    "primeopinion:nupkill104@gmail.com": "#9C27B0",
+    "opinionoutpost:user01@example.com": "#4CAF50",
+    "swagbucks:user02@example.com": "#2196F3",
+    "surveyjunkie:user04@example.com": "#FF9800",
+    "primeopinion:user03@example.com": "#9C27B0",
     "TOTAL": "#F44336",
   };
 

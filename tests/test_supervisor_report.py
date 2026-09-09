@@ -17,7 +17,6 @@ from pathlib import Path
 
 _CANDIDATES = [
     Path.home() / ".hermes" / "scripts" / "survey_fleet_supervisor.py",
-    Path("/home/erich/.hermes/scripts/survey_fleet_supervisor.py"),
 ]
 _mod_path = next((p for p in _CANDIDATES if p.exists()), None)
 assert _mod_path is not None, "survey_fleet_supervisor.py not found under ~/.hermes/scripts/"

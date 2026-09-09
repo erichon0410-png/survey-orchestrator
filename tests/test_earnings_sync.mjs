@@ -21,30 +21,30 @@ console.log("=== Task 1 Tests: parseEarningsRates & loadEarningsRates ===");
   assert.ok(config.portMap, "config.portMap must exist");
 
   // Port map tests
-  assert.equal(config.portMap[3013], "opinionoutpost:nupkill64@gmail.com");
-  assert.equal(config.portMap[3014], "swagbucks:erichong0410@gmail.com");
-  assert.equal(config.portMap[3015], "primeopinion:nupkill104@gmail.com");
-  assert.equal(config.portMap[3016], "surveyjunkie:nupkill94@gmail.com");
-  assert.equal(config.portMap[3017], "swagbucks:erichong0410@gmail.com");
+  assert.equal(config.portMap[3013], "opinionoutpost:user01@example.com");
+  assert.equal(config.portMap[3014], "swagbucks:user02@example.com");
+  assert.equal(config.portMap[3015], "primeopinion:user03@example.com");
+  assert.equal(config.portMap[3016], "surveyjunkie:user04@example.com");
+  assert.equal(config.portMap[3017], "swagbucks:user02@example.com");
 
   // Accounts tests
-  const sb = config.accounts["swagbucks:erichong0410@gmail.com"];
+  const sb = config.accounts["swagbucks:user02@example.com"];
   assert.ok(sb, "Swagbucks account config must exist");
   assert.equal(sb.platform, "swagbucks");
   assert.equal(sb.conversion, "points_to_usd");
   assert.equal(sb.rate, 0.01);
   assert.deepEqual(sb.ports, [3014, 3017]);
 
-  const oo = config.accounts["opinionoutpost:nupkill64@gmail.com"];
+  const oo = config.accounts["opinionoutpost:user01@example.com"];
   assert.ok(oo, "OpinionOutpost account config must exist");
   assert.equal(oo.conversion, "platform_displayed_usd");
 
-  const sj = config.accounts["surveyjunkie:nupkill94@gmail.com"];
+  const sj = config.accounts["surveyjunkie:user04@example.com"];
   assert.ok(sj, "SurveyJunkie account config must exist");
   assert.equal(sj.conversion, "points_to_usd");
   assert.equal(sj.rate, 0.01);
 
-  const po = config.accounts["primeopinion:nupkill104@gmail.com"];
+  const po = config.accounts["primeopinion:user03@example.com"];
   assert.ok(po, "PrimeOpinion account config must exist");
   assert.equal(po.conversion, "platform_displayed_usd");
 
@@ -72,7 +72,7 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
     total_usd: 99.99, // stale / bogus total_usd to test that rate * total_raw is used!
   };
   const sbRes = computeMarkerEarnings(sbMarker, rates);
-  assert.equal(sbRes.account, "swagbucks:erichong0410@gmail.com");
+  assert.equal(sbRes.account, "swagbucks:user02@example.com");
   assert.equal(sbRes.platform, "swagbucks");
   assert.equal(sbRes.usd_earned, 5.00, "Must calculate 500 * 0.01 = 5.00, ignoring stale total_usd");
   assert.equal(sbRes.points_raw, 500);
@@ -85,7 +85,7 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
     total_raw: 250,
   };
   const sbRes2 = computeMarkerEarnings(sbMarker2, rates);
-  assert.equal(sbRes2.account, "swagbucks:erichong0410@gmail.com", "Port 3017 must map to same Swagbucks account");
+  assert.equal(sbRes2.account, "swagbucks:user02@example.com", "Port 3017 must map to same Swagbucks account");
   assert.equal(sbRes2.usd_earned, 2.50);
 
   // Test 2.3: computeMarkerEarnings with platform_displayed_usd (opinionoutpost)
@@ -97,7 +97,7 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
     total_raw: null,
   };
   const ooRes = computeMarkerEarnings(ooMarker, rates);
-  assert.equal(ooRes.account, "opinionoutpost:nupkill64@gmail.com");
+  assert.equal(ooRes.account, "opinionoutpost:user01@example.com");
   assert.equal(ooRes.platform, "opinionoutpost");
   assert.equal(ooRes.usd_earned, 5.25);
 
@@ -110,7 +110,7 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
     total_usd: 0,
   };
   const sjRes = computeMarkerEarnings(sjMarker, rates);
-  assert.equal(sjRes.account, "surveyjunkie:nupkill94@gmail.com");
+  assert.equal(sjRes.account, "surveyjunkie:user04@example.com");
   assert.equal(sjRes.usd_earned, 3.50);
 
   // Test 2.5: Seen-set save & load roundtrip
@@ -122,7 +122,7 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
 
     seenData.seen["3014_target_reached_20260904_120000.json"] = {
       processed_at: "2026-09-04T12:00:05Z",
-      account: "swagbucks:erichong0410@gmail.com",
+      account: "swagbucks:user02@example.com",
       usd_earned: 5.0,
     };
     saveSeenSet(tmpSeenPath, seenData);
@@ -288,8 +288,8 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
     const rates = loadEarningsRates();
     const res14 = computeMarkerEarnings(sb14Marker, rates);
     const res17 = computeMarkerEarnings(sb17Marker, rates);
-    assert.equal(res14.account, "swagbucks:erichong0410@gmail.com");
-    assert.equal(res17.account, "swagbucks:erichong0410@gmail.com");
+    assert.equal(res14.account, "swagbucks:user02@example.com");
+    assert.equal(res17.account, "swagbucks:user02@example.com");
     assert.equal(res14.usd_earned, 5.0);
     assert.equal(res17.usd_earned, 5.0);
   }

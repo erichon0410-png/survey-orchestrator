@@ -235,11 +235,11 @@ Expected: FAIL with `AssertionError: Port 3015 platform must be PrimeOpinion` (`
 
 Change:
 ```javascript
-{ port: 3015, container: "SurveyCompleter-gmail-05", platform: "ACOP", account: "nupkill104@gmail.com" },
+{ port: 3015, container: "SurveyCompleter-gmail-05", platform: "ACOP", account: "user03@example.com" },
 ```
 To:
 ```javascript
-{ port: 3015, container: "SurveyCompleter-gmail-05", platform: "PrimeOpinion", account: "nupkill104@gmail.com" },
+{ port: 3015, container: "SurveyCompleter-gmail-05", platform: "PrimeOpinion", account: "user03@example.com" },
 ```
 
 - [ ] **Step 4: Run test to verify it passes**

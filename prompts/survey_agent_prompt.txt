@@ -63,8 +63,8 @@ How to drive it:
 
 0. FIRST STEP (before any WebSocket work):
    Register the absolute module directory using:
-   `mcp__node_repl__js_add_node_module_dir("/home/erich/.dsh/profiles/web/node_modules")`
-   (absolute path is mandatory — relative paths are rejected). Then in the REPL use `const WebSocket = require("ws");`.
+   `mcp__node_repl__js_add_node_module_dir("<HOME>/.dsh/profiles/web/node_modules")`
+   where <HOME> is your home directory (e.g. /home/<you> on Linux, C:\Users\<you> on Windows) — the absolute path is mandatory, relative paths are rejected. Then in the REPL use `const WebSocket = require("ws");`.
    Fallback: Node's built-in global `WebSocket` works without any package.
 
 1. Connect and verify control (startup snippet):
@@ -142,7 +142,7 @@ Rules:
 - A pre-existing account balance is recorded as starting_balance_usd for context ONLY and does NOT count toward the completion quota. The carried total is the sum of newly completed value from THIS port's runs in THIS run only (not a lifetime balance).
 - At start, read the account's current balance from the platform dashboard/rewards page and record it as starting_balance_usd (for context only) and starting_balance_raw.
 - Conversion rates (AUTHORITATIVE — see config/earnings_rates.yaml for full detail):
-    * Swagbucks: 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account (erichong0410@gmail.com) — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
+    * Swagbucks: 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account (user02@example.com) — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
     * SurveyJunkie: 100 points = $1.00 (1 point = $0.01). Convert raw points to USD at this fixed rate.
     * OpinionOutpost: read the platform's displayed USD reward balance DIRECTLY. Do NOT assume a fixed point rate — the old ~$0.10/point hint was wrong and caused the $10-vs-$5.22 error. Always read the dollar amount shown on the rewards/cash-out page.
     * PrimeOpinion: read the platform's displayed balance. Default $0.00 until verified.

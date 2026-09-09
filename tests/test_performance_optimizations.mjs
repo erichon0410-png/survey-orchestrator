@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
-const ORCHESTRATOR_PATH = "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
+const ORCHESTRATOR_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
 const DRIVER_PATH = path.join(ROOT, "scripts", "survey_driver.mjs");
 
 console.log("=== Running Performance Optimizations Tests ===");
