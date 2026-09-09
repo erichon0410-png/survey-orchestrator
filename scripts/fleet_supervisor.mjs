@@ -17,7 +17,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { FLEET, deployAgent } from "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
+import { FLEET, deployAgent, ensureFleetRunning } from "/home/erich/.dsh/plugins/dsh-survey-orchestrator/lib/orchestrator.js";
 import { syncEarnings } from "./earnings_sync.mjs";
 
 const ROOT = "/home/erich/workspace/survey-orchestrator";
@@ -206,6 +206,16 @@ async function tick() {
 
     const psLines = execSync("ps -eo pid,args", { encoding: "utf8" }).split("\n");
 
+    // If any uncompleted port has no alive agent, ensure Docker fleet is running first
+    const hasDeadPorts = FLEET.some((item) => !targetPorts.has(item.port) && !isPortAlive(item.port, psLines));
+    if (hasDeadPorts) {
+      try {
+        await ensureFleetRunning(ROOT);
+      } catch (e) {
+        appendSupervisorLog({ ts: iso(), event: "ensure_fleet_running_failed", error: String(e) });
+      }
+    }
+
     for (const item of [...FLEET].sort((a, b) => a.port - b.port)) {
       const port = item.port;
 
@@ -300,9 +310,11 @@ async function tick() {
     // One bad tick never kills the loop.
     appendSupervisorLog({ ts: iso(), event: "tick_error", error: String(e) });
   }
-  console.log(
-    `supervisor tick ${iso()} alive:[${alivePorts.join(",")}] restarted:[${restartedPorts.join(",")}]`
-  );
+  try {
+    console.log(
+      `supervisor tick ${iso()} alive:[${alivePorts.join(",")}] restarted:[${restartedPorts.join(",")}]`
+    );
+  } catch {}
 }
 
 // --- startup ---
@@ -321,8 +333,10 @@ function shutdown() {
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+process.on("SIGHUP", () => {});
 
 process.on("uncaughtException", (e) => {
+  if (e && (e.code === "EPIPE" || String(e).includes("EPIPE"))) return;
   appendSupervisorLog({ ts: iso(), event: "uncaught_exception", error: String(e) });
 });
 process.on("unhandledRejection", (e) => {

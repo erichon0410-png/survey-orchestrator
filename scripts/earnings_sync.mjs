@@ -324,12 +324,12 @@ export function syncEarnings({
     const lastKnownEntry = currentBalances.get(account);
     const last_known_balance = lastKnownEntry?.balance_usd != null ? Number(lastKnownEntry.balance_usd) : 0;
 
-    // Platform markers report cumulative total balance.
-    // Ensure monotonic non-decreasing updates:
-    let new_balance = Math.max(usd_earned, last_known_balance);
-    new_balance = Math.round(new_balance * 100) / 100;
+    // Platform markers report the CURRENT cumulative balance. Record it verbatim
+    // so a redemption (balance going DOWN) shows up as a negative delta in the
+    // ledger — do NOT clamp back up to the previous high-water mark.
+    const new_balance = Math.round(usd_earned * 100) / 100;
 
-    if (new_balance > last_known_balance) {
+    if (new_balance !== last_known_balance) {
       appendSnapshot({
         account,
         port,

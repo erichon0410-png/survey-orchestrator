@@ -1,48 +1,41 @@
 #!/usr/bin/env node
-// scripts/build_earnings_graph.mjs — generate cumulative earnings graph HTML.
-// Reads reports/earnings_ledger.jsonl, writes reports/earnings_graph.html.
-// Node >= 18, stdlib only.
+// scripts/build_earnings_graph.mjs — generate the earnings artifacts from the append-only ledger.
+// Reads reports/earnings_ledger.jsonl (via earnings_ledger.readAll) and writes, under reports/:
+//   earnings_daily.csv    daily gross-earnings CSV (columns: day, amount_earned)
+//   spend_ledger.jsonl    auto-categorized redemption (withdraw) tracker
+//   earnings_graph.png    cumulative gross-earnings line vs a $20/mo cost line (break-even marked)
+//   earnings_graph.html   self-contained per-account balance chart + $20/mo cost line + break-even
+// Node >= 18, stdlib only. No I/O at import time; the CLI block runs on `node build_earnings_graph.mjs`.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readAll } from "./earnings_ledger.mjs";
+import { deriveEvents, dailyEarnings, cumulativeSeries } from "./earnings_derive.mjs";
+import { renderEarningsChart, findBreakEven } from "./chart_png.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
-const LEDGER_PATH = path.join(ROOT, "reports", "earnings_ledger.jsonl");
-const OUTPUT_PATH = path.join(ROOT, "reports", "earnings_graph.html");
+const REPORTS_DIR = path.join(ROOT, "reports");
+const LEDGER_PATH = path.join(REPORTS_DIR, "earnings_ledger.jsonl");
+const CSV_PATH = path.join(REPORTS_DIR, "earnings_daily.csv");
+const SPEND_LEDGER_PATH = path.join(REPORTS_DIR, "spend_ledger.jsonl");
+const PNG_PATH = path.join(REPORTS_DIR, "earnings_graph.png");
+const OUTPUT_PATH = path.join(REPORTS_DIR, "earnings_graph.html");
 
-// --- read ledger ---
-function readLedger() {
-  if (!fs.existsSync(LEDGER_PATH)) {
-    console.error(`ERROR: Ledger not found at ${LEDGER_PATH}`);
-    process.exit(1);
-  }
-  const text = fs.readFileSync(LEDGER_PATH, "utf-8").trim();
-  if (!text) {
-    console.error("ERROR: Ledger is empty");
-    process.exit(1);
-  }
-  return text.split("\n").map((line) => {
-    try { return JSON.parse(line); }
-    catch { return null; }
-  }).filter(Boolean);
-}
+// $20/month subscription cost (ChatGPT Plus), amortized per day.
+const COST_PER_DAY_USD = 20 / 30;
 
-// --- build per-account series + total ---
+// --- per-account cumulative-balance series for the HTML chart ---------------
 function buildSeries(entries) {
-  // Group by account
   const byAccount = new Map();
   for (const e of entries) {
     if (!byAccount.has(e.account)) byAccount.set(e.account, []);
     byAccount.get(e.account).push({ ts: e.ts, balance_usd: e.balance_usd });
   }
 
-  // Collect all unique timestamps, sorted
   const allTimestamps = [...new Set(entries.map((e) => e.ts))].sort();
-
-  // Build per-account cumulative series (carry forward last known balance)
   const accounts = [...byAccount.keys()].sort();
   const series = {};
   for (const acct of accounts) {
@@ -55,7 +48,6 @@ function buildSeries(entries) {
     });
   }
 
-  // Build TOTAL series
   series["TOTAL"] = allTimestamps.map((ts, i) => {
     let sum = 0;
     for (const acct of accounts) {
@@ -67,12 +59,69 @@ function buildSeries(entries) {
   return { series, accounts, allTimestamps };
 }
 
-// --- generate HTML ---
-function generateHTML(entries, seriesData) {
-  const { series, accounts, allTimestamps } = seriesData;
-  const now = new Date().toISOString();
+// --- new artifact builders (pure) ------------------------------------------
 
-  // Latest balances
+// dailyRows: [{date:"YYYY-MM-DD", amount_earned_usd:<n>}] (from earnings_derive.dailyEarnings).
+export function buildCsv(dailyRows) {
+  const rows = Array.isArray(dailyRows) ? dailyRows : [];
+  let out = "day,amount_earned\n";
+  for (const r of rows) {
+    const amt = Number(r && r.amount_earned_usd);
+    out += `${r.date},${(Number.isFinite(amt) ? amt : 0).toFixed(2)}\n`;
+  }
+  return out;
+}
+
+// events: deriveEvents() output. Only withdraw (redemption) events are tracked, each with its
+// auto-assigned category ("subscription" for the $20-$25 band, else "leisure").
+export function buildSpendLedger(events) {
+  const rows = (Array.isArray(events) ? events : []).filter((e) => e && e.kind === "withdraw");
+  if (rows.length === 0) return "";
+  return rows.map((e) => JSON.stringify({ ts: e.ts, account: e.account, kind: e.kind, usd: e.usd, category: e.category })).join("\n") + "\n";
+}
+
+// Earliest ledger date across all accounts = the fresh-start cutover baseline (both lines start ~$0 here).
+function earliestActiveDate(entries) {
+  let m = null;
+  for (const e of entries) {
+    if (e && e.ts && (m === null || String(e.ts) < m)) m = String(e.ts);
+  }
+  if (!m) return null;
+  const d = new Date(m);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Build every earnings artifact from raw ledger entries. Pure (PNG encoding is deterministic).
+ * @param {Array<{ts:string, account:string, balance_usd:number}>} entries  readAll() rows
+ * @param {{costPerDayUsd?:number, t0Date?:string}} [opts]
+ * @returns {{csv:string, spendLedger:string, pngBuffer:Buffer, html:string,
+ *            series:Array, events:Array, dailyRows:Array, t0Date:string, breakEven:(object|null)}}
+ */
+export function computeArtifacts(entries, { costPerDayUsd = COST_PER_DAY_USD, t0Date = null } = {}) {
+  const all = Array.isArray(entries) ? entries : [];
+  const events = deriveEvents(all);
+  const dailyRows = dailyEarnings(events);
+  const series = cumulativeSeries(dailyRows);
+  const t0 = t0Date || earliestActiveDate(all) || new Date().toISOString().slice(0, 10);
+  const breakEven = findBreakEven(series, costPerDayUsd, t0);
+  const csv = buildCsv(dailyRows);
+  const spendLedger = buildSpendLedger(events);
+  const pngBuffer = renderEarningsChart({ series, costPerDayUsd, t0Date: t0 });
+  const html = generateHTML(all, buildSeries(all), { costPerDayUsd, t0Date: t0, breakEven });
+  return { csv, spendLedger, pngBuffer, html, series, events, dailyRows, t0Date: t0, breakEven };
+}
+
+// --- generate HTML (per-account balance chart + $20/mo cost line + break-even) ---
+function generateHTML(entries, seriesData, chart = {}) {
+  const { series, accounts } = seriesData;
+  const now = new Date().toISOString();
+  const t0Date = chart.t0Date || null;
+  const costPerDayUsd = chart.costPerDayUsd != null ? chart.costPerDayUsd : COST_PER_DAY_USD;
+  const breakEven = chart.breakEven || null;
+
+  // Latest balances (for the summary panel).
   const latest = {};
   let grandTotal = 0;
   for (const acct of accounts) {
@@ -83,7 +132,6 @@ function generateHTML(entries, seriesData) {
   }
   grandTotal = Math.round(grandTotal * 100) / 100;
 
-  // Display name: just the platform part of "platform:email"
   const displayName = (acct) => acct.split(":")[0];
 
   const COLORS = {
@@ -94,8 +142,7 @@ function generateHTML(entries, seriesData) {
     "TOTAL": "#F44336",
   };
 
-  // Embed data for the chart
-  const chartData = JSON.stringify({ series, accounts, allTimestamps, latest, grandTotal });
+  const chartData = JSON.stringify({ series, accounts, allTimestamps: seriesData.allTimestamps, latest, grandTotal, t0Date, costPerDayUsd, breakEven: breakEven ? { date: breakEven.date, cumulative_usd: breakEven.cumulative_usd } : null });
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -114,38 +161,30 @@ function generateHTML(entries, seriesData) {
   .summary h2 { font-size: 1.1em; margin-bottom: 12px; color: #fff; }
   .summary-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a2e; font-size: 0.95em; }
   .summary-row:last-child { border-bottom: none; }
-  .summary-row.total { font-weight: bold; font-size: 1.1em; color: #F44336; border-top: 2px solid #333; margin-top: 4px; padding-top: 10px; }
-  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
-  .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 12px; font-size: 0.85em; }
-  .legend-item { display: flex; align-items: center; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 0.85em; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
 <h1>Survey Fleet Cumulative Earnings</h1>
-<p class="subtitle">Last updated: ${now}</p>
+<p class="subtitle">Generated ${now} &middot; per-account balance vs $20/mo cost line</p>
 
 <div class="chart-container">
-  <canvas id="chart" width="900" height="400"></canvas>
-  <div class="legend" id="legend"></div>
+  <canvas id="chart"></canvas>
+  <div id="legend" class="legend"></div>
 </div>
 
 <div class="summary">
   <h2>Current Balances</h2>
-  ${accounts.map((acct) => `
-  <div class="summary-row">
-    <span><span class="dot" style="background:${COLORS[acct] || '#888'}"></span>${displayName(acct)}</span>
-    <span>$${latest[acct].toFixed(2)}</span>
-  </div>`).join("")}
-  <div class="summary-row total">
-    <span><span class="dot" style="background:${COLORS.TOTAL}"></span>TOTAL</span>
-    <span>$${grandTotal.toFixed(2)}</span>
-  </div>
+${accounts.map((acct) => `    <div class="summary-row"><span>${displayName(acct)}</span><span>$${latest[acct].toFixed(2)}</span></div>`).join("\n")}
+    <div class="summary-row" style="font-weight:bold;"><span>TOTAL</span><span>$${grandTotal.toFixed(2)}</span></div>
+    <div class="summary-row"><span>Break-even ($20/mo)</span><span>${breakEven ? breakEven.date : "not yet"}</span></div>
 </div>
 
 <script>
 const DATA = ${chartData};
 const COLORS = ${JSON.stringify(COLORS)};
-
 function displayName(acct) { return acct.split(":")[0]; }
 
 function drawChart() {
@@ -163,7 +202,7 @@ function drawChart() {
   const plotW = W - pad.left - pad.right;
   const plotH = H - pad.top - pad.bottom;
 
-  // Find Y range
+  // Find Y range (balances + $20/mo cost line over the visible span)
   let yMax = 0;
   const allKeys = [...DATA.accounts, "TOTAL"];
   for (const key of allKeys) {
@@ -171,14 +210,26 @@ function drawChart() {
       if (pt.balance_usd > yMax) yMax = pt.balance_usd;
     }
   }
-  yMax = Math.ceil(yMax / 5) * 5; // round up to nearest 5
-  if (yMax === 0) yMax = 5;
 
   // X range (timestamps)
   const timestamps = DATA.allTimestamps;
   const tMin = new Date(timestamps[0]).getTime();
   const tMax = timestamps.length > 1 ? new Date(timestamps[timestamps.length - 1]).getTime() : tMin + 86400000;
   const tRange = tMax - tMin || 1;
+
+  // $20/mo cost line is linear in time from t0.
+  const t0Time = DATA.t0Date ? new Date(DATA.t0Date + "T00:00:00Z").getTime() : tMin;
+  function costAt(ts) {
+    const days = (new Date(ts).getTime() - t0Time) / 86400000;
+    return Math.max(0, DATA.costPerDayUsd * days);
+  }
+  const firstTs = timestamps[0];
+  const lastTs = timestamps[timestamps.length - 1];
+
+  // Fold the cost line into Y range so it is always visible.
+  if (costAt(lastTs) > yMax) yMax = costAt(lastTs);
+  yMax = Math.ceil(yMax / 5) * 5;
+  if (yMax === 0) yMax = 5;
 
   function xPos(ts) { return pad.left + ((new Date(ts).getTime() - tMin) / tRange) * plotW; }
   function yPos(val) { return pad.top + plotH - (val / yMax) * plotH; }
@@ -195,7 +246,6 @@ function drawChart() {
     const val = (yMax / yTicks) * i;
     const y = yPos(val);
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
-    // Y label
     ctx.fillStyle = "#888";
     ctx.font = "12px monospace";
     ctx.textAlign = "right";
@@ -234,7 +284,7 @@ function drawChart() {
     const isTotal = key === "TOTAL";
     ctx.strokeStyle = color;
     ctx.lineWidth = isTotal ? 3 : 1.5;
-    ctx.setLineDash(isTotal ? [] : []);
+    ctx.setLineDash([]);
     ctx.beginPath();
     for (let i = 0; i < pts.length; i++) {
       const x = xPos(pts[i].ts);
@@ -243,13 +293,35 @@ function drawChart() {
     }
     ctx.stroke();
 
-    // Draw dots at data points
     ctx.fillStyle = color;
     for (const pt of pts) {
       const x = xPos(pt.ts);
       const y = yPos(pt.balance_usd);
       ctx.beginPath(); ctx.arc(x, y, isTotal ? 4 : 3, 0, Math.PI * 2); ctx.fill();
     }
+  }
+
+  // $20/mo cost line (straight, linear in time from t0) — red dashed.
+  ctx.strokeStyle = "#D64543";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xPos(firstTs), yPos(costAt(firstTs)));
+  ctx.lineTo(xPos(lastTs), yPos(costAt(lastTs)));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Break-even marker (where cumulative earnings first cover the $20/mo cost).
+  if (DATA.breakEven) {
+    const beTs = DATA.breakEven.date + "T00:00:00Z";
+    const bx = xPos(beTs);
+    const by = yPos(costAt(beTs));
+    ctx.fillStyle = "#F6C453";
+    ctx.beginPath(); ctx.arc(bx, by, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#1a1a2e";
+    ctx.font = "bold 11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("BREAK-EVEN", bx, by - 12);
   }
 
   // Legend
@@ -272,27 +344,40 @@ window.addEventListener("resize", drawChart);
 </html>`;
 }
 
-// --- main ---
-const entries = readLedger();
-const seriesData = buildSeries(entries);
-const html = generateHTML(entries, seriesData);
+// --- CLI main -------------------------------------------------------------
+const isCLI = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
 
-fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
-fs.writeFileSync(OUTPUT_PATH, html, "utf-8");
+if (isCLI) {
+  let entries;
+  if (!fs.existsSync(LEDGER_PATH)) {
+    console.error(`ERROR: Ledger not found at ${LEDGER_PATH}`);
+    process.exit(1);
+  }
+  entries = readAll();
 
-const stat = fs.statSync(OUTPUT_PATH);
-console.log(`✓ Generated ${OUTPUT_PATH}`);
-console.log(`  Size: ${stat.size} bytes`);
-console.log(`  Accounts: ${seriesData.accounts.join(", ")}`);
-console.log(`  Total series: TOTAL`);
-console.log(`  Data points: ${seriesData.allTimestamps.length} timestamps`);
+  const art = computeArtifacts(entries);
 
-// Print current balances
-console.log("\nCurrent balances:");
-let grandTotal = 0;
-for (const acct of seriesData.accounts) {
-  const last = seriesData.series[acct][seriesData.series[acct].length - 1];
-  console.log(`  ${acct}: $${last.balance_usd.toFixed(2)}`);
-  grandTotal += last.balance_usd;
+  fs.mkdirSync(REPORTS_DIR, { recursive: true });
+  fs.writeFileSync(CSV_PATH, art.csv, "utf-8");
+  fs.writeFileSync(SPEND_LEDGER_PATH, art.spendLedger, "utf-8");
+  fs.writeFileSync(PNG_PATH, art.pngBuffer);
+  fs.writeFileSync(OUTPUT_PATH, art.html, "utf-8");
+
+  console.log("Earnings artifacts written:");
+  console.log(`  ${CSV_PATH} (${fs.statSync(CSV_PATH).size} bytes)`);
+  console.log(`  ${SPEND_LEDGER_PATH} (${fs.statSync(SPEND_LEDGER_PATH).size} bytes, ${art.spendLedger ? art.spendLedger.trim().split("\n").length : 0} redemptions)`);
+  console.log(`  ${PNG_PATH} (${fs.statSync(PNG_PATH).size} bytes)`);
+  console.log(`  ${OUTPUT_PATH} (${fs.statSync(OUTPUT_PATH).size} bytes)`);
+  console.log(`  t0Date (fresh-start baseline): ${art.t0Date}`);
+  console.log(`  break-even: ${art.breakEven ? art.breakEven.date : "not yet"}`);
+
+  // Current balances (unchanged operator-facing summary).
+  const seriesData = buildSeries(entries);
+  let grandTotal = 0;
+  for (const acct of seriesData.accounts) {
+    const last = seriesData.series[acct][seriesData.series[acct].length - 1];
+    console.log(`  ${acct}: $${last.balance_usd.toFixed(2)}`);
+    grandTotal += last.balance_usd;
+  }
+  console.log(`  TOTAL: $${(Math.round(grandTotal * 100) / 100).toFixed(2)}`);
 }
-console.log(`  TOTAL: $${(Math.round(grandTotal * 100) / 100).toFixed(2)}`);

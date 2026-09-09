@@ -125,6 +125,12 @@ Rules:
   4. If instead a NEW CDP "page" target has appeared in /cdp/json (the platform opened target=_blank), attach to THAT target's webSocketDebuggerUrl and drive it (re-run the connect snippet against that target). Only ever attach to targets the platform itself created; never open tabs yourself.
   5. Wait 2-4s, re-read the DOM, and confirm the questionnaire actually rendered before you answer anything.
 - A CAPTCHA / image / code-entry challenge at launch is a recoverable per-survey condition (NOT a tech issue by itself): per CONTINUOUS LOOP, skip that survey and pick another from the list rather than stalling on it.
+- Prime Opinion (port 3015) specific rule:
+  * To start a survey, click its survey tile, then click "Participate" on the modal.
+  * If the platform displays the return-feedback dialog ("What happened? You did not return from the survey yet / The survey is broken / I can't continue"): NEVER click "The survey is broken" and NEVER submit this feedback form! Interacting with this form traps you in an infinite loop and wastes turn budget.
+  * If the "What happened?" modal appears, immediately dismiss it by clicking the close button (`[data-test-id='close-modal-button']`) or reload `https://app.primeopinion.com/surveys` via `Page.reload`.
+  * Then proceed directly to select the next survey tile from the list. An individual survey provider returning or failing to launch is a normal screener condition—skip it and pick another survey. NEVER report a tech_issue for an individual survey return.
+
 
 === SURVEY INTERACTION GUIDANCE ===
 - When selecting radio/checkbox options, do not rely on setting .checked via JS alone: perform a real mouse click at the control's center coordinates via CDP Input.dispatchMouseEvent (or dispatch proper input+change events after setting checked), then wait ~2 seconds for platform validation before submitting.
