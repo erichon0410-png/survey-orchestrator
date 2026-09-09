@@ -30,11 +30,13 @@ htmlcov/
 .env
 *.local.yaml
 *.local.yml
+config/survey_config.yaml
 config/survey_config.yaml.local
 
 # Internal staging, probes, and scratch files
 .scratch_probe/
 .patch-stage/
+/scripts/_scratch/
 
 # OCR model data
 *.traineddata

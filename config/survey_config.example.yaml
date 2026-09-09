@@ -1,7 +1,15 @@
-# Survey Orchestrator Configuration — Survey Completion (Farming)
-# Agents navigate to reward platforms and complete surveys as a persona.
-# Per-container platform/account assignments are authoritative for this session:
-# container NN <-> CDP port 30NN. Sites stay pre-loaded; agents never re-navigate onboarding.
+# Survey Orchestrator Configuration — TEMPLATE (example)
+#
+# This is the committed, secret-free template. The live config that the fleet
+# actually reads is `config/survey_config.yaml` (gitignored; real credentials).
+#
+# To set up a new machine:
+#   1. cp config/survey_config.example.yaml config/survey_config.yaml
+#   2. Fill in each agent's account.email / password and set status to logged-in
+#      once the persona has signed in on that container.
+#
+# Keep real credentials ONLY in config/survey_config.yaml (and optionally a
+# gitignored .local copy). Never commit real emails or passwords.
 
 agents:
   - name: agent-03
@@ -12,9 +20,9 @@ agents:
     persona: personas/mei_lin_chen.yaml
     platforms: [opinionoutpost]
     account:
-      email: "YOUR_EMAIL_HERE"
-      password: "YOUR_PASSWORD_HERE"
-      status: pending-login
+      email: "user03@example.com"
+      password: "CHANGE_ME"
+      status: not-logged-in
 
   - name: agent-04
     container: SurveyCompleter-gmail-04
@@ -24,9 +32,9 @@ agents:
     persona: personas/mei_lin_chen.yaml
     platforms: [swagbucks]
     account:
-      email: "YOUR_EMAIL_HERE"
-      password: "YOUR_PASSWORD_HERE"
-      status: pending-login
+      email: "user04@example.com"
+      password: "CHANGE_ME"
+      status: not-logged-in
 
   - name: agent-05
     container: SurveyCompleter-gmail-05
@@ -36,9 +44,9 @@ agents:
     persona: personas/mei_lin_chen.yaml
     platforms: [primeopinion]
     account:
-      email: "YOUR_EMAIL_HERE"
-      password: "YOUR_PASSWORD_HERE"
-      status: pending-login
+      email: "user05@example.com"
+      password: "CHANGE_ME"
+      status: not-logged-in
 
   - name: agent-06
     container: SurveyCompleter-gmail-06
@@ -48,9 +56,9 @@ agents:
     persona: personas/mei_lin_chen.yaml
     platforms: [surveyjunkie]
     account:
-      email: "YOUR_EMAIL_HERE"
-      password: "YOUR_PASSWORD_HERE"
-      status: pending-login
+      email: "user06@example.com"
+      password: "CHANGE_ME"
+      status: not-logged-in
 
   - name: agent-07
     container: SurveyCompleter-gmail-07
@@ -60,9 +68,9 @@ agents:
     persona: personas/mei_lin_chen.yaml
     platforms: [swagbucks]
     account:
-      email: "YOUR_EMAIL_HERE"
-      password: "YOUR_PASSWORD_HERE"
-      status: pending-login
+      email: "user07@example.com"
+      password: "CHANGE_ME"
+      status: not-logged-in
 
 execution:
   max_concurrent: 4
@@ -79,17 +87,17 @@ platforms:
     notes: "Complete surveys for SB points. Record payout per survey."
 
   acop:
-    url: https://www.acop.com   # moved from acopinion.com (NXDOMAIN as of 2026-09-03); login at /login/
-    notes: "American Consumer Opinion (Dynata). Container 05 task completed 2026-08-27."
+    url: https://www.acop.com
+    notes: "American Consumer Opinion (Dynata). Login at /login/."
 
   opinionoutpost:
     url: https://www.opinionoutpost.com
-    notes: "Container 03. Dynata panel (f/k/a Survey Sampling International); Cognito auth. Pw reset via email-code flow 2026-08-27; login verified."
+    notes: "Dynata panel; Cognito auth."
 
   surveyjunkie:
     url: https://www.surveyjunkie.com
-    notes: "Container 06. Account was Google-OAuth created; password set via SJ create-password email flow."
+    notes: "Account created via Google-OAuth; password set via SJ create-password email flow."
 
   primeopinion:
     url: https://app.primeopinion.com/
-    notes: "Container 05 / port 3015. Switched from ACOP on 2026-09-04 per operator. Sign in with Google using account email."
+    notes: "Port 3015. Sign in with Google using the account email."
