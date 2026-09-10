@@ -82,7 +82,7 @@ export async function readContainer({
   host = "127.0.0.1",
   preferredHosts = [],
   maxText = 6000,
-  timeoutMs = 30000,
+  timeoutMs = 5000,
 } = {}) {
   const fail = (error) => ({
     ok: false,
@@ -148,8 +148,13 @@ export async function readContainer({
         ws.send(JSON.stringify({ id, method, params }));
       });
 
-    const shot = await send("Page.captureScreenshot", { format: "png" });
-    const screenshot_b64 = (shot && shot.data) || "";
+    let screenshot_b64 = "";
+    try {
+      const shot = await send("Page.captureScreenshot", { format: "png" });
+      screenshot_b64 = (shot && shot.data) || "";
+    } catch (e) {
+      // Screenshot failed — non-fatal, continue with text extraction only.
+    }
 
     const maxN = Math.max(200, Number(maxText) || 6000);
     const expr = `(function(){try{var t=(document.body&&document.body.innerText)||"";return JSON.stringify({title:document.title||"",url:location.href||"",text:t.slice(0,${maxN})});}catch(e){return JSON.stringify({title:(document.title||""),url:(location.href||""),text:"",error:String(e)});}})()`;
