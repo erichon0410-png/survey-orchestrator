@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import {
-  buildCsv, buildSpendLedger, computeArtifacts,
+  buildCsv, buildSpendLedger, buildSeries, computeArtifacts,
 } from "../scripts/build_earnings_graph.mjs";
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -21,12 +21,12 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 //   B: 0 -> 3 (earn +3) -> 1  (withdraw 2  => "leisure")
 // Earliest ts across all rows is 2026-09-01, so the fresh-start t0Date = 2026-09-01.
 const ENTRIES = [
-  { ts: "2026-09-01T00:00:00.000Z", account: "p:a@x", balance_usd: 0 },
-  { ts: "2026-09-01T00:00:00.000Z", account: "q:b@x", balance_usd: 0 },
-  { ts: "2026-09-02T00:00:00.000Z", account: "p:a@x", balance_usd: 5 },
-  { ts: "2026-09-02T00:00:00.000Z", account: "q:b@x", balance_usd: 3 },
-  { ts: "2026-09-05T00:00:00.000Z", account: "p:a@x", balance_usd: -15 },
-  { ts: "2026-09-06T00:00:00.000Z", account: "q:b@x", balance_usd: 1 },
+  { ts: "2026-09-01T00:00:00.000Z", account: "p:a@x", platform: "p", balance_usd: 0 },
+  { ts: "2026-09-01T00:00:00.000Z", account: "q:b@x", platform: "q", balance_usd: 0 },
+  { ts: "2026-09-02T00:00:00.000Z", account: "p:a@x", platform: "p", balance_usd: 5 },
+  { ts: "2026-09-02T00:00:00.000Z", account: "q:b@x", platform: "q", balance_usd: 3 },
+  { ts: "2026-09-05T00:00:00.000Z", account: "p:a@x", platform: "p", balance_usd: -15 },
+  { ts: "2026-09-06T00:00:00.000Z", account: "q:b@x", platform: "q", balance_usd: 1 },
 ];
 
 // --- 1. buildCsv -----------------------------------------------------------
@@ -105,6 +105,23 @@ const ENTRIES = [
   assert.ok(Buffer.isBuffer(art.pngBuffer) && art.pngBuffer.subarray(0, 8).toString("hex") === PNG_SIG.toString("hex"), "empty still yields a valid PNG");
   assert.equal(art.breakEven, null, "no break-even with no data");
   assert.ok(art.html.includes("not yet"), "html reports break-even not yet reached");
+}
+
+// --- 5. buildSeries dedupes by platform (the double-count fix) -------------
+{
+  // Two account keys sharing ONE platform must collapse to a single series key,
+  // and the TOTAL line must reflect that platform's balance once, not twice.
+  const DUP = [
+    { ts: "2026-09-01T00:00:00.000Z", account: "swagbucks:a@x", platform: "swagbucks", balance_usd: 0 },
+    { ts: "2026-09-01T00:00:00.000Z", account: "swagbucks:b@x", platform: "swagbucks", balance_usd: 0 },
+    { ts: "2026-09-02T00:00:00.000Z", account: "swagbucks:a@x", platform: "swagbucks", balance_usd: 10 },
+    { ts: "2026-09-02T00:00:00.000Z", account: "swagbucks:b@x", platform: "swagbucks", balance_usd: 10 },
+  ];
+  const bs = buildSeries(DUP);
+  assert.equal(bs.accounts.length, 1, "two accounts on one platform collapse to a single series key");
+  assert.equal(bs.accounts[0], "swagbucks", "the single key is the platform name");
+  const totalLast = bs.series["TOTAL"][bs.series["TOTAL"].length - 1].balance_usd;
+  assert.equal(totalLast, 10, "TOTAL reflects the platform balance once, not twice (10, not 20)");
 }
 
 console.log("test_build_earnings_graph: OK");

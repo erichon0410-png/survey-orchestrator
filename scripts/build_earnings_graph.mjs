@@ -27,20 +27,26 @@ const OUTPUT_PATH = path.join(REPORTS_DIR, "earnings_graph.html");
 // $20/month subscription cost (ChatGPT Plus), amortized per day.
 const COST_PER_DAY_USD = 20 / 30;
 
-// --- per-account cumulative-balance series for the HTML chart ---------------
-function buildSeries(entries) {
-  const byAccount = new Map();
+// --- per-platform cumulative-balance series for the HTML chart ---------------
+// Grouped by PLATFORM (not account): a single platform can appear under two
+// account keys (historical real email + config placeholder), so grouping by
+// account would draw two lines and double-count the TOTAL. The returned
+// `accounts` array therefore holds platform names; displayName() renders them
+// as-is (no colon to strip). Same-ts collisions within a platform: last wins.
+export function buildSeries(entries) {
+  const byPlatform = new Map();
   for (const e of entries) {
-    if (!byAccount.has(e.account)) byAccount.set(e.account, []);
-    byAccount.get(e.account).push({ ts: e.ts, balance_usd: e.balance_usd });
+    const key = e.platform || e.account; // fall back to account when no platform recorded
+    if (!byPlatform.has(key)) byPlatform.set(key, []);
+    byPlatform.get(key).push({ ts: e.ts, balance_usd: e.balance_usd });
   }
 
   const allTimestamps = [...new Set(entries.map((e) => e.ts))].sort();
-  const accounts = [...byAccount.keys()].sort();
+  const accounts = [...byPlatform.keys()].sort();
   const series = {};
   for (const acct of accounts) {
-    const dataPoints = byAccount.get(acct);
-    const tsMap = new Map(dataPoints.map((d) => [d.ts, d.balance_usd]));
+    const dataPoints = byPlatform.get(acct);
+    const tsMap = new Map(dataPoints.map((d) => [d.ts, d.balance_usd])); // same-ts -> last wins
     let lastVal = 0;
     series[acct] = allTimestamps.map((ts) => {
       if (tsMap.has(ts)) lastVal = tsMap.get(ts);
@@ -48,6 +54,7 @@ function buildSeries(entries) {
     });
   }
 
+  // TOTAL sums the per-platform series (deduped), not per-account.
   series["TOTAL"] = allTimestamps.map((ts, i) => {
     let sum = 0;
     for (const acct of accounts) {
@@ -134,12 +141,14 @@ function generateHTML(entries, seriesData, chart = {}) {
 
   const displayName = (acct) => acct.split(":")[0];
 
+  // Keys are platform names (buildSeries groups by platform). Unknown platforms
+  // fall back to gray in the renderer.
   const COLORS = {
-    "opinionoutpost:user01@example.com": "#4CAF50",
-    "swagbucks:user02@example.com": "#2196F3",
-    "surveyjunkie:user04@example.com": "#FF9800",
-    "primeopinion:user03@example.com": "#9C27B0",
-    "TOTAL": "#F44336",
+    opinionoutpost: "#4CAF50",
+    swagbucks: "#2196F3",
+    surveyjunkie: "#FF9800",
+    primeopinion: "#9C27B0",
+    TOTAL: "#F44336",
   };
 
   const chartData = JSON.stringify({ series, accounts, allTimestamps: seriesData.allTimestamps, latest, grandTotal, t0Date, costPerDayUsd, breakEven: breakEven ? { date: breakEven.date, cumulative_usd: breakEven.cumulative_usd } : null });

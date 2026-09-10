@@ -73,6 +73,31 @@ export function latestBalances() {
 }
 
 /**
+ * Get the latest balance snapshot collapsed to ONE entry per PLATFORM.
+ *
+ * Why this exists: a single real platform can appear under two account keys in
+ * the ledger (a historical real email + a config placeholder, e.g.
+ * "swagbucks:erichong...@gmail.com" and "swagbucks:user02@example.com").
+ * latestBalances() is per-account-key, so summing it counts that platform twice
+ * (the "double-count"). Any surface that displays a TOTAL current balance must
+ * use this accessor instead. Sync's per-account lookups still use latestBalances().
+ *
+ * Keying: e.platform, falling back to e.account when an entry lacks a platform
+ * (so such an entry becomes its own key and cannot double-count). Last one wins
+ * by append order, matching the Map-set convention in latestBalances().
+ * @returns {Map<string, Object>} platform -> latest entry for that platform
+ */
+export function latestPlatformBalances() {
+  const entries = readAll();
+  const latest = new Map();
+  for (const e of entries) {
+    const key = e.platform || e.account; // last one wins (chronological append order)
+    latest.set(key, e);
+  }
+  return latest;
+}
+
+/**
  * Get the chronological time series for a specific account.
  * @param {string} account - e.g. "swagbucks:user02@example.com"
  * @returns {Array<{ts: string, balance_usd: number, points_raw: number|null, note: string}>}

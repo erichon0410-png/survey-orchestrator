@@ -222,7 +222,7 @@ export function computeMarkerEarnings(marker, ratesConfig) {
 }
 
 import { execFileSync } from "node:child_process";
-import { appendSnapshot, latestBalances } from "./earnings_ledger.mjs";
+import { appendSnapshot, latestBalances, latestPlatformBalances } from "./earnings_ledger.mjs";
 
 const DEFAULT_INBOX = path.join(ROOT, "reports", "inbox");
 const DEFAULT_PROCESSED = path.join(ROOT, "reports", "processed");
@@ -451,11 +451,13 @@ if (isCLI) {
     console.log("Earnings graph refreshed: reports/earnings_graph.html");
   }
 
-  console.log("\n--- Current Balances ---");
+  // Display by PLATFORM (deduped): the same platform can appear under two account
+  // keys, so summing per-account latestBalances() would count it twice.
+  console.log("\n--- Current Balances (by platform) ---");
   let grandTotal = 0;
-  for (const [acct, entry] of res.latestBalances) {
-    if (acct.startsWith("_test:")) continue;
-    console.log(`  ${acct}: $${entry.balance_usd.toFixed(2)} (port ${entry.port}, ${entry.ts})`);
+  for (const [platform, entry] of latestPlatformBalances()) {
+    if (String(platform).startsWith("_test")) continue;
+    console.log(`  ${platform}: $${entry.balance_usd.toFixed(2)} (port ${entry.port}, ${entry.ts})`);
     grandTotal += entry.balance_usd;
   }
   grandTotal = Math.round(grandTotal * 100) / 100;
