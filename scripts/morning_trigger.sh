@@ -21,8 +21,15 @@ echo "==================================================================" >> "$L
 echo "[$(date -Iseconds)] Bringing up Docker Compose containers..." >> "$LOG_FILE"
 ./fleet.sh start >> "$LOG_FILE" 2>&1
 
-# 2. Start Fleet Supervisor daemon (auto-deploys agents on tick)
-echo "[$(date -Iseconds)] Starting Fleet Supervisor daemon..." >> "$LOG_FILE"
+# 2. Reset target_reached markers for a fresh day (earnings sync first, then clear) so the
+#    supervisor re-drives ALL ports instead of skipping yesterday's "target reached" ports.
+echo "[$(date -Iseconds)] Resetting target_reached markers for a fresh day..." >> "$LOG_FILE"
+./scripts/reset_target_markers.sh >> "$LOG_FILE" 2>&1
+
+# 3. Restart the Fleet Supervisor FRESH: a running supervisor caches "target reached" ports in
+#    memory, so stop any stale instance and start a clean one that redeploys all agents on tick.
+echo "[$(date -Iseconds)] Restarting Fleet Supervisor daemon (fresh)..." >> "$LOG_FILE"
+./scripts/stop_supervisor.sh >> "$LOG_FILE" 2>&1
 ./scripts/start_supervisor.sh >> "$LOG_FILE" 2>&1
 
 echo "[$(date -Iseconds)] 07:00 AM Morning Survey Fleet Trigger Finished Successfully." >> "$LOG_FILE"

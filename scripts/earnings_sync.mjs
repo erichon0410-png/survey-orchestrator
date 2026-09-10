@@ -10,6 +10,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 
+// Daily earnings tracking state
+const DAILY_EARNINGS_STATE_PATH = path.join(ROOT, "reports", "processed", ".daily_earnings_state.json");
+const DAILY_EARNINGS_LOG_PATH = path.join(ROOT, "reports", "daily_earnings.jsonl");
+
 const RATES_CONFIG_PATH = path.join(ROOT, "config", "earnings_rates.yaml");
 
 /**
@@ -133,6 +137,147 @@ export function saveSeenSet(filePath, seenData) {
     seen: seenData.seen || {},
   };
   fs.writeFileSync(filePath, JSON.stringify(dataToSave, null, 2) + "\n", "utf-8");
+}
+
+// --- Daily earnings state management ---
+
+/**
+ * Load the daily earnings state (previous day's totals per port).
+ * @param {string} filePath
+ * @returns {{ version: number, last_sync_date: string|null, previous_totals: Record<string, {total_usd: number, ts: string}> }}
+ */
+export function loadDailyEarningsState(filePath = DAILY_EARNINGS_STATE_PATH) {
+  if (!fs.existsSync(filePath)) {
+    return { version: 1, last_sync_date: null, previous_totals: {} };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (raw && typeof raw === "object") {
+      return {
+        version: raw.version || 1,
+        last_sync_date: raw.last_sync_date || null,
+        previous_totals: raw.previous_totals || {},
+      };
+    }
+  } catch (e) {
+    console.warn(`earnings_sync: failed to parse daily earnings state ${filePath}: ${e.message}`);
+  }
+  return { version: 1, last_sync_date: null, previous_totals: {} };
+}
+
+/**
+ * Save the daily earnings state.
+ * @param {string} filePath
+ * @param {{ version: number, last_sync_date: string|null, previous_totals: Record<string, any> }} state
+ */
+export function saveDailyEarningsState(filePath = DAILY_EARNINGS_STATE_PATH, state) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const dataToSave = {
+    version: state.version || 1,
+    last_sync_date: state.last_sync_date ?? null,
+    previous_totals: state.previous_totals || {},
+  };
+  fs.writeFileSync(filePath, JSON.stringify(dataToSave, null, 2) + "\n", "utf-8");
+}
+
+/**
+ * Compute and record daily earnings for all active accounts.
+ * Called during daily heartbeat sync to track day-over-day deltas.
+ * @param {Object} options
+ * @param {string} [options.stateFilePath]
+ * @param {string} [options.logFilePath]
+ * @returns {{ recordsWritten: number, dailyRecords: Array<Object> }}
+ */
+export function computeDailyEarnings({
+  stateFilePath = DAILY_EARNINGS_STATE_PATH,
+  logFilePath = DAILY_EARNINGS_LOG_PATH,
+} = {}) {
+  const state = loadDailyEarningsState(stateFilePath);
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  
+  // Load current balances from the latest snapshots
+  const currentBalances = latestPlatformBalances();
+  
+  const dailyRecords = [];
+  
+  for (const [platform, entry] of currentBalances) {
+    if (String(platform).startsWith("_test")) continue;
+    
+    // Use platform name as key since multiple platforms can share a port
+    const stateKey = `platform_${platform}`;
+    const prevTotal = state.previous_totals[stateKey]?.total_usd ?? null;
+    
+    let dailyEarnings = null;
+    if (prevTotal !== null) {
+      dailyEarnings = Math.round((entry.balance_usd - prevTotal) * 100) / 100;
+    }
+    
+    const record = {
+      ts: new Date().toISOString(),
+      date: today,
+      port: entry.port,
+      platform,
+      current_total_usd: Math.round(entry.balance_usd * 100) / 100,
+      previous_day_total_usd: prevTotal !== null ? Math.round(prevTotal * 100) / 100 : null,
+      daily_earnings_usd: dailyEarnings,
+      surveys_completed: null, // Not tracked per-day in current architecture
+    };
+    
+    dailyRecords.push(record);
+    
+    // Update state with today's totals for tomorrow's comparison
+    state.previous_totals[stateKey] = {
+      total_usd: entry.balance_usd,
+      ts: new Date().toISOString(),
+    };
+  }
+  
+  // Write records to append-only log
+  if (dailyRecords.length > 0) {
+    fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
+    const logLines = dailyRecords.map(r => JSON.stringify(r)).join("\n") + "\n";
+    fs.appendFileSync(logFilePath, logLines, "utf-8");
+  }
+  
+  // Save updated state
+  state.last_sync_date = today;
+  saveDailyEarningsState(stateFilePath, state);
+  
+  return { recordsWritten: dailyRecords.length, dailyRecords };
+}
+
+/**
+ * Query daily earnings for a specific date range.
+ * @param {Object} options
+ * @param {string} [options.startDate] - YYYY-MM-DD
+ * @param {string} [options.endDate] - YYYY-MM-DD
+ * @param {number} [options.port] - Filter by port
+ * @returns {Array<Object>}
+ */
+export function queryDailyEarnings({ startDate, endDate, port } = {}) {
+  if (!fs.existsSync(DAILY_EARNINGS_LOG_PATH)) {
+    return [];
+  }
+  
+  const lines = fs.readFileSync(DAILY_EARNINGS_LOG_PATH, "utf-8").trim().split("\n");
+  const results = [];
+  
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line);
+      
+      if (startDate && record.date < startDate) continue;
+      if (endDate && record.date > endDate) continue;
+      if (port !== undefined && record.port !== port) continue;
+      
+      results.push(record);
+    } catch (e) {
+      // Skip malformed lines
+    }
+  }
+  
+  return results;
 }
 
 /**
@@ -401,6 +546,18 @@ export function syncEarnings({
 
     seenData.last_daily_sync_ts = Date.now();
     saveSeenSet(seenFilePath, seenData);
+    
+    // Compute and record daily earnings deltas
+    const dailyResult = computeDailyEarnings();
+    if (dailyResult.recordsWritten > 0 && !silent) {
+      console.log(`Daily earnings recorded: ${dailyResult.recordsWritten} agents`);
+      for (const rec of dailyResult.dailyRecords) {
+        const dailyStr = rec.daily_earnings_usd !== null 
+          ? `$${rec.daily_earnings_usd.toFixed(2)}` 
+          : "first day";
+        console.log(`  ${rec.platform} (port ${rec.port}): total=$${rec.current_total_usd.toFixed(2)}, today=${dailyStr}`);
+      }
+    }
   }
 
   // Rebuild graph if any snapshots or heartbeats were appended, or if forceGraph requested
@@ -434,6 +591,57 @@ const isCLI = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(
 if (isCLI) {
   const isDaily = process.argv.includes("--daily");
   const isForce = process.argv.includes("--force-graph");
+  const showDailyEarnings = process.argv.includes("--daily-earnings");
+  
+  // Handle --daily-earnings query mode
+  if (showDailyEarnings) {
+    const today = new Date().toISOString().slice(0, 10);
+    console.log("=== Daily Earnings Report ===");
+    
+    // Show today's earnings
+    let records = queryDailyEarnings({ startDate: today, endDate: today });
+    if (records.length > 0) {
+      console.log(`\nToday (${today}):`);
+      let dayTotal = 0;
+      for (const rec of records) {
+        const dailyStr = rec.daily_earnings_usd !== null 
+          ? `$${rec.daily_earnings_usd.toFixed(2)}` 
+          : "first day";
+        console.log(`  ${rec.platform} (port ${rec.port}): total=$${rec.current_total_usd.toFixed(2)}, today=${dailyStr}`);
+        if (rec.daily_earnings_usd !== null) {
+          dayTotal += rec.daily_earnings_usd;
+        }
+      }
+      console.log(`  DAY TOTAL: $${dayTotal.toFixed(2)}`);
+    } else {
+      console.log("No daily earnings records for today yet.");
+    }
+    
+    // Show last 7 days summary
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekStart = weekAgo.toISOString().slice(0, 10);
+    records = queryDailyEarnings({ startDate: weekStart, endDate: today });
+    
+    if (records.length > 0) {
+      console.log("\nLast 7 days summary (by platform):");
+      const byPlatform = {};
+      for (const rec of records) {
+        if (!byPlatform[rec.platform]) {
+          byPlatform[rec.platform] = { port: rec.port, total: 0, count: 0 };
+        }
+        if (rec.daily_earnings_usd !== null) {
+          byPlatform[rec.platform].total += rec.daily_earnings_usd;
+          byPlatform[rec.platform].count++;
+        }
+      }
+      for (const [platform, data] of Object.entries(byPlatform)) {
+        console.log(`  ${platform} (port ${data.port}): $${data.total.toFixed(2)} over ${data.count} day(s)`);
+      }
+    }
+    
+    process.exit(0);
+  }
 
   console.log("=== Survey Fleet Earnings Sync ===");
   const res = syncEarnings({

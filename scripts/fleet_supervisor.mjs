@@ -39,10 +39,16 @@ const POLL_MS = 30_000;
 const WINDOW_MS = 60 * 60 * 1000; // rolling 60-minute window
 const MAX_RESTARTS_PER_WINDOW = 4; // 5th needed restart within the window -> cap
 const COOLDOWN_MS = Number(process.env.SUPERVISOR_COOLDOWN_MS) || 5 * 60 * 1000; // bounded cooldown before re-attempting a paused port (default 5 min)
-const DAILY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // daily schedule (24h)
+const DAILY_SYNC_HOUR = 7; // trigger at 7:00 AM local time each day
+
+// Earnings efficiency tracking - terminate agents that don't earn within 1 hour
+const IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS) || 60 * 60 * 1000; // 1 hour default
+
+// Authentication timeout - terminate agents stuck on sign-in for too long
+const AUTH_TIMEOUT_MS = Number(process.env.AGENT_AUTH_TIMEOUT_MS) || 30 * 60 * 1000; // 30 minutes default
 
 // --- state (in-memory, this process's life) ---
-let lastEarningsSyncTs = 0; // 0 ensures first tick triggers initial sync
+let lastEarningsSyncDate = null; // YYYY-MM-DD string of last sync date
 const restarts = new Map(); // port -> [timestamp ms, ...]
 const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
 const targetPorts = new Set(); // target-reached marker found: never restart again
@@ -185,15 +191,221 @@ function capPort(port) {
   pausedPorts.set(port, { pausedAt: now, resumeAt, status: "repair_pending" });
 }
 
+// --- auth timeout: terminate agents stuck on sign-in for too long ---
+function checkAuthTimeouts(psLines) {
+  const now = Date.now();
+  
+  for (const item of FLEET) {
+    const port = item.port;
+    
+    // Skip ports that are paused, completed, or not running
+    if (pausedPorts.has(port)) continue;
+    if (targetPorts.has(port)) continue;
+    if (!isPortAlive(port, psLines)) continue;
+    
+    // Read recent status log entries and check for auth issues
+    const statusLog = path.join(LOGS_DIR, `agent_${port}_status.jsonl`);
+    let lastAuthIssueMs = 0;
+    let authIssueCount = 0;
+    
+    try {
+      if (fs.existsSync(statusLog)) {
+        const content = fs.readFileSync(statusLog, "utf8");
+        const lines = content.split("\n");
+        
+        // Scan from the end (most recent) looking for auth issues
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          try {
+            const entry = JSON.parse(line);
+            
+            // Check if this is an auth-related issue
+            const note = (entry.note || "").toLowerCase();
+            const event = (entry.event || "").toLowerCase();
+            
+            const isAuthIssue = 
+              note.includes("unauthenticated") ||
+              note.includes("login page") ||
+              note.includes("requires login") ||
+              note.includes("session_bounced_to_login") ||
+              note.includes("authentication remains") ||
+              note.includes("lost authenticated state") ||
+              note.includes("dashboard route still requires login") ||
+              event === "tech_issue_reported" && (
+                note.includes("auth") || 
+                note.includes("login") ||
+                note.includes("session")
+              );
+            
+            if (isAuthIssue) {
+              authIssueCount++;
+              // Try to extract timestamp
+              const ts = entry.ts ? new Date(entry.ts).getTime() : 0;
+              if (ts > lastAuthIssueMs) {
+                lastAuthIssueMs = ts;
+              }
+            }
+            
+            // Stop scanning after finding enough recent entries or going back too far
+            if (i < lines.length - 100) break;
+          } catch (e) {
+            // Ignore malformed lines
+          }
+        }
+        
+        // If we found auth issues and the last one was recent but long ago overall, terminate
+        if (authIssueCount >= 3 && lastAuthIssueMs > 0) {
+          const timeSinceLastAuthIssue = now - lastAuthIssueMs;
+          
+          // Only terminate if the auth issue persisted for more than AUTH_TIMEOUT_MS
+          // Check when the agent started vs when auth issues began
+          const agentStartedMs = getAgentStartTime(port);
+          if (agentStartedMs > 0) {
+            const timeSinceStart = now - agentStartedMs;
+            
+            // If agent has been running longer than auth timeout and still having auth issues
+            if (timeSinceStart > AUTH_TIMEOUT_MS && timeSinceLastAuthIssue < 5 * 60 * 1000) {
+              const stuckMinutes = Math.round(timeSinceStart / 60000);
+              appendSupervisorLog({
+                ts: iso(),
+                port,
+                action: "auth_timeout_terminate",
+                stuck_minutes: stuckMinutes,
+                auth_issue_count: authIssueCount,
+                note: `Agent terminated: stuck on authentication for ${stuckMinutes} minutes (${authIssueCount} auth issues reported)`,
+              });
+              
+              // Kill the agent process
+              try {
+                execSync(`pkill -f "survey_driver.*port=${port}" || true`);
+              } catch (e) {
+                appendSupervisorLog({ ts: iso(), port, action: "auth_kill_failed", error: String(e) });
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors reading status log
+    }
+  }
+}
+
+// Helper: get agent start time from status log
+function getAgentStartTime(port) {
+  const statusLog = path.join(LOGS_DIR, `agent_${port}_status.jsonl`);
+  try {
+    if (fs.existsSync(statusLog)) {
+      const content = fs.readFileSync(statusLog, "utf8");
+      const lines = content.split("\n");
+      
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        try {
+          const entry = JSON.parse(trimmed);
+          if (entry.event === "start") {
+            return new Date(entry.ts).getTime();
+          }
+        } catch (e) {
+          // Ignore malformed lines
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+  return 0;
+}
+
+// --- idle timeout: terminate agents that haven't earned in 1 hour ---
+function checkIdleTimeouts(psLines) {
+  const now = Date.now();
+  
+  for (const item of FLEET) {
+    const port = item.port;
+    
+    // Skip ports that are paused, completed, or not running
+    if (pausedPorts.has(port)) continue;
+    if (targetPorts.has(port)) continue;
+    if (!isPortAlive(port, psLines)) continue;
+    
+    // Check last activity: look for recent target_reached markers or status log entries
+    const statusLog = path.join(LOGS_DIR, `agent_${port}_status.jsonl`);
+    let lastActivityMs = 0;
+    
+    try {
+      if (fs.existsSync(statusLog)) {
+        const stat = fs.statSync(statusLog);
+        lastActivityMs = stat.mtimeMs;
+      }
+    } catch (e) {
+      // Ignore errors checking log file
+    }
+    
+    // Also check for recent target_reached markers in inbox/processed
+    try {
+      const markerRe = new RegExp(`^${port}_target_reached_.*\\.json$`);
+      for (const dir of [INBOX, PROCESSED]) {
+        if (!fs.existsSync(dir)) continue;
+        for (const file of fs.readdirSync(dir)) {
+          if (markerRe.test(file)) {
+            try {
+              const stat = fs.statSync(path.join(dir, file));
+              if (stat.mtimeMs > lastActivityMs) {
+                lastActivityMs = stat.mtimeMs;
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors scanning for markers
+    }
+    
+    if (lastActivityMs === 0) {
+      // No activity recorded at all — agent just started or log missing
+      continue;
+    }
+    
+    const idleMs = now - lastActivityMs;
+    if (idleMs > IDLE_TIMEOUT_MS) {
+      const idleMinutes = Math.round(idleMs / 60000);
+      appendSupervisorLog({
+        ts: iso(),
+        port,
+        action: "idle_timeout_terminate",
+        idle_minutes: idleMinutes,
+        note: `Agent terminated: no earnings activity for ${idleMinutes} minutes (threshold: ${Math.round(IDLE_TIMEOUT_MS / 60000)} min)`,
+      });
+      
+      // Kill the agent process
+      try {
+        execSync(`pkill -f "survey_driver.*port=${port}" || true`);
+      } catch (e) {
+        appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
+      }
+    }
+  }
+}
+
 // --- one tick: check every FLEET port in ascending order ---
 async function tick() {
   const alivePorts = [];
   const restartedPorts = [];
   try {
-    // --- Daily earnings sync & graph refresh ---
-    const now = Date.now();
-    if (now - lastEarningsSyncTs >= DAILY_SYNC_INTERVAL_MS) {
-      lastEarningsSyncTs = now;
+    // --- Daily earnings sync & graph refresh at 7:00 AM ---
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    
+    // Trigger sync once per day at or after 7:00 AM local time
+    if (lastEarningsSyncDate !== todayStr && now.getHours() >= DAILY_SYNC_HOUR) {
+      lastEarningsSyncDate = todayStr;
       try {
         const syncRes = syncEarnings({ dailyHeartbeat: true });
         appendSupervisorLog({
@@ -214,6 +426,12 @@ async function tick() {
     }
 
     const psLines = execSync("ps -eo pid,args", { encoding: "utf8" }).split("\n");
+
+    // Check for idle agents that haven't earned in 1 hour — terminate them to save Codex budget
+    checkIdleTimeouts(psLines);
+
+    // Check for agents stuck on authentication screens — terminate after 30 minutes
+    checkAuthTimeouts(psLines);
 
     // If any uncompleted port has no alive agent, ensure Docker fleet is running first
     const hasDeadPorts = FLEET.some((item) => !targetPorts.has(item.port) && !isPortAlive(item.port, psLines));
