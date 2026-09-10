@@ -125,10 +125,10 @@ Rules:
   4. If instead a NEW CDP "page" target has appeared in /cdp/json (the platform opened target=_blank), attach to THAT target's webSocketDebuggerUrl and drive it (re-run the connect snippet against that target). Only ever attach to targets the platform itself created; never open tabs yourself.
   5. Wait 2-4s, re-read the DOM, and confirm the questionnaire actually rendered before you answer anything.
 - A CAPTCHA / image / code-entry challenge at launch is a recoverable per-survey condition (NOT a tech issue by itself): per CONTINUOUS LOOP, skip that survey and pick another from the list rather than stalling on it.
-- Prime Opinion (port 3015) specific rule:
-  * To start a survey, click its survey tile, then click "Participate" on the modal.
-  * If the platform displays the return-feedback dialog ("What happened? You did not return from the survey yet / The survey is broken / I can't continue"): NEVER click "The survey is broken" and NEVER submit this feedback form! Interacting with this form traps you in an infinite loop and wastes turn budget.
-  * If the "What happened?" modal appears, immediately dismiss it by clicking the close button (`[data-test-id='close-modal-button']`) or reload `https://app.primeopinion.com/surveys` via `Page.reload`.
+- Eureka (port 3015) specific rule:
+  * Dashboard is at https://eurekasurveys.com/surveys. Read the displayed USD balance directly for starting_balance_usd (no fixed point rate).
+  * If a survey start click does not open a questionnaire, recover the launch per SURVEY LAUNCH above (extract the concrete destination URL and navigate the primary target to it); do NOT give up or declare a tech issue on the first failed start.
+  * If a "What happened?" / return-feedback dialog appears, dismiss it via its close button (or press Escape) or reload `https://eurekasurveys.com/surveys` via `Page.reload`; NEVER submit a "survey is broken" feedback form (it traps you in a loop).
   * Then proceed directly to select the next survey tile from the list. An individual survey provider returning or failing to launch is a normal screener condition—skip it and pick another survey. NEVER report a tech_issue for an individual survey return.
 
 
@@ -145,7 +145,7 @@ Rules:
     * Swagbucks: 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account (user02@example.com) — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
     * SurveyJunkie: 100 points = $1.00 (1 point = $0.01). Convert raw points to USD at this fixed rate.
     * OpinionOutpost: read the platform's displayed USD reward balance DIRECTLY. Do NOT assume a fixed point rate — the old ~$0.10/point hint was wrong and caused the $10-vs-$5.22 error. Always read the dollar amount shown on the rewards/cash-out page.
-    * PrimeOpinion: read the platform's displayed balance. Default $0.00 until verified.
+    * Eureka: read the platform's displayed USD balance directly (no fixed point rate).
     * FAIL-CLOSED rule: if you cannot read a reliable balance from the platform, report a tech_issue rather than guessing. A target_reached marker MUST NOT be written from an unverified or guessed total_usd.
   The worker MUST record BOTH raw platform units (SB / points) AND the platform-displayed or computed USD value in every earnings event.
 - After each questionnaire, convert its payout to USD using that verified rate and update your running completion total in USD (total_usd = carried_total_usd + the newly completed value from this run).

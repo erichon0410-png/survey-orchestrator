@@ -148,6 +148,7 @@ function generateHTML(entries, seriesData, chart = {}) {
     swagbucks: "#2196F3",
     surveyjunkie: "#FF9800",
     primeopinion: "#9C27B0",
+    eureka: "#009688",
     TOTAL: "#F44336",
   };
 

@@ -78,7 +78,7 @@ All 5 browser containers are managed under Docker Compose:
 |---|---|---|---|---|
 | `browser-03` | `SurveyCompleter-gmail-03` | 3013 | Opinion Outpost | `moneyprinterturbo-gmail_mpt-gmail-03-config` |
 | `browser-04` | `SurveyCompleter-gmail-04` | 3014 | Swagbucks | `moneyprinterturbo-gmail_mpt-gmail-04-config` |
-| `browser-05` | `SurveyCompleter-gmail-05` | 3015 | Prime Opinion | `moneyprinterturbo-gmail_mpt-gmail-05-config` |
+| `browser-05` | `SurveyCompleter-gmail-05` | 3015 | Eureka | `moneyprinterturbo-gmail_mpt-gmail-05-config` |
 | `browser-06` | `SurveyCompleter-gmail-06` | 3016 | SurveyJunkie | `moneyprinterturbo-gmail_mpt-gmail-06-config` |
 | `browser-07` | `SurveyCompleter-gmail-07` | 3017 | Swagbucks | `moneyprinterturbo-gmail_mpt-gmail-07-config` |
 

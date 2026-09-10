@@ -1,7 +1,7 @@
 # Survey Orchestrator
 
 Multi-agent survey completion system. Spawns Codex agents bound to browser containers
-to farm surveys on reward platforms (Swagbucks, Opinion Outpost, Prime Opinion, Survey Junkie)
+to farm surveys on reward platforms (Swagbucks, Opinion Outpost, Eureka, Survey Junkie)
 as a consistent persona.
 
 ## Architecture
@@ -74,7 +74,7 @@ Before launching agents, you must populate your account credentials in [`config/
 4. Configure all agent platform assignments:
    - **`agent-03`** (Port 3013): Opinion Outpost (`opinionoutpost`)
    - **`agent-04`** (Port 3014): Swagbucks (`swagbucks`)
-   - **`agent-05`** (Port 3015): Prime Opinion (`primeopinion`)
+   - **`agent-05`** (Port 3015): Eureka (`eureka`)
    - **`agent-06`** (Port 3016): Survey Junkie (`surveyjunkie`)
    - **`agent-07`** (Port 3017): Swagbucks / Secondary (`swagbucks`)
 

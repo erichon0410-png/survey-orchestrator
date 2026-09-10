@@ -28,17 +28,17 @@ accounts:
     unit: points
     notes: "SurveyJunkie shows points. 100 points = $1.00."
 
-  primeopinion:user03@example.com:
-    platform: primeopinion
-    email: user03@example.com
+  eureka:erichong0410@gmail.com:
+    platform: eureka
+    email: erichong0410@gmail.com
     ports: [3015]
-    conversion: platform_displayed_usd  # read displayed balance; default $0.00 until verified
-    notes: "New platform (was ACOP). Read the displayed balance."
+    conversion: platform_displayed_usd  # Eureka displays a USD balance directly; read it as-is (no fixed point rate)
+    notes: "Container 05 / port 3015. Migrated from PrimeOpinion to Eureka on 2026-09-10 per operator. Read the displayed USD balance."
 
 # Port-to-account lookup (derived from above; kept flat for driver speed)
 port_map:
   3013: opinionoutpost:user01@example.com
   3014: swagbucks:user02@example.com
-  3015: primeopinion:user03@example.com
+  3015: eureka:erichong0410@gmail.com
   3016: surveyjunkie:user04@example.com
   3017: swagbucks:user02@example.com

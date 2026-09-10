@@ -28,7 +28,7 @@ console.log("✓ FD cleanup test passed");
 if (fs.existsSync(tmpLog)) fs.unlinkSync(tmpLog);
 
 const p3015 = FLEET.find(f => f.port === 3015);
-assert.equal(p3015.platform, "PrimeOpinion", "Port 3015 platform must be PrimeOpinion");
+assert.equal(p3015.platform, "Eureka", "Port 3015 platform must be Eureka");
 console.log("✓ FLEET port 3015 platform verified");
 
 function killProcessGroup(pid, signal = "SIGTERM") {

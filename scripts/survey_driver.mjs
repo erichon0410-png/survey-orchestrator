@@ -79,12 +79,13 @@ const RATE_TABLE = {
   surveyjunkie:   { conversion: "points_to_usd", rate: 0.01, unit: "points" },
   opinionoutpost: { conversion: "platform_displayed_usd" },
   primeopinion:   { conversion: "platform_displayed_usd" },
+  eureka:         { conversion: "platform_displayed_usd" },
 };
 
 const PORT_TO_PLATFORM = {
   3013: "opinionoutpost",
   3014: "swagbucks",
-  3015: "primeopinion",
+  3015: "eureka",
   3016: "surveyjunkie",
   3017: "swagbucks",
 };

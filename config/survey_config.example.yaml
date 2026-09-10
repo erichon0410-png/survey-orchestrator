@@ -42,7 +42,7 @@ agents:
     model: gpt-5.6-luna
     reasoning_effort: medium
     persona: personas/mei_lin_chen.yaml
-    platforms: [primeopinion]
+    platforms: [eureka]
     account:
       email: "user05@example.com"
       password: "CHANGE_ME"
@@ -98,6 +98,6 @@ platforms:
     url: https://www.surveyjunkie.com
     notes: "Account created via Google-OAuth; password set via SJ create-password email flow."
 
-  primeopinion:
-    url: https://app.primeopinion.com/
-    notes: "Port 3015. Sign in with Google using the account email."
+  eureka:
+    url: https://eurekasurveys.com/surveys
+    notes: "Port 3015. Migrated from PrimeOpinion to Eureka on 2026-09-10; login erichong0410@gmail.com; displays USD balance directly."

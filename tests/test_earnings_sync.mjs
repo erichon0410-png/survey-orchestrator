@@ -23,7 +23,7 @@ console.log("=== Task 1 Tests: parseEarningsRates & loadEarningsRates ===");
   // Port map tests
   assert.equal(config.portMap[3013], "opinionoutpost:user01@example.com");
   assert.equal(config.portMap[3014], "swagbucks:user02@example.com");
-  assert.equal(config.portMap[3015], "primeopinion:user03@example.com");
+  assert.equal(config.portMap[3015], "eureka:erichong0410@gmail.com");
   assert.equal(config.portMap[3016], "surveyjunkie:user04@example.com");
   assert.equal(config.portMap[3017], "swagbucks:user02@example.com");
 
@@ -44,9 +44,9 @@ console.log("=== Task 1 Tests: parseEarningsRates & loadEarningsRates ===");
   assert.equal(sj.conversion, "points_to_usd");
   assert.equal(sj.rate, 0.01);
 
-  const po = config.accounts["primeopinion:user03@example.com"];
-  assert.ok(po, "PrimeOpinion account config must exist");
-  assert.equal(po.conversion, "platform_displayed_usd");
+  const eu = config.accounts["eureka:erichong0410@gmail.com"];
+  assert.ok(eu, "Eureka account config must exist");
+  assert.equal(eu.conversion, "platform_displayed_usd");
 
   console.log("✓ Task 1 Passed: parseEarningsRates & loadEarningsRates");
 }
