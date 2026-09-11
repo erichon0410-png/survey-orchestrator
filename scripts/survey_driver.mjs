@@ -202,25 +202,36 @@ function readLastTechIssue() {
 function findIdleConditionTechIssue() {
   const statusFile = STATUS_JSONL;
   try {
-    if (!fs.existsSync(statusFile)) return null;
+    if (!fs.existsSync(statusFile)) {
+      log("debug", "findIdleConditionTechIssue: status file does not exist");
+      return null;
+    }
     const content = fs.readFileSync(statusFile, "utf-8");
     const lines = content.trim().split("\n");
+    log("debug", `findIdleConditionTechIssue: scanning ${lines.length} lines`);
     // Search backwards for the most recent tech_issue_reported event with idle keywords
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
         if (entry.event === "tech_issue_reported") {
           const note = entry.note ? entry.note.toLowerCase() : "";
+          log("debug", `findIdleConditionTechIssue: checking tech issue at line ${i}`, { note });
           if (note.includes("no surveys") || 
               note.includes("empty questionnaire") || 
               note.includes("no questionnaires") || 
               note.includes("no surveys available")) {
+            log("debug", "findIdleConditionTechIssue: FOUND idle condition");
             return entry;
           }
         }
-      } catch {}
+      } catch (e) {
+        log("debug", `findIdleConditionTechIssue: parse error at line ${i}`, { err: String(e) });
+      }
     }
-  } catch {}
+    log("debug", "findIdleConditionTechIssue: no idle condition found");
+  } catch (e) {
+    log("debug", "findIdleConditionTechIssue: exception", { err: String(e) });
+  }
   return null;
 }
 
@@ -708,10 +719,14 @@ async function main() {
       if (!sessionId) {
         log("warn", "no thread_id captured from initial turn");
         
-        // Check if this is an idle condition (no surveys available) vs. transient failure
-        const idleIssue = findIdleConditionTechIssue();
+        // Check if this is an idle condition by examining the driver's own output
+        // Look for patterns that indicate no surveys are available
+        const lastOutput = fs.existsSync(OUTPUT_JSONL) ? fs.readFileSync(OUTPUT_JSONL, "utf-8") : "";
+        const hasIdleKeywords = lastOutput.toLowerCase().includes("no surveys") || 
+                                lastOutput.toLowerCase().includes("empty questionnaire") ||
+                                lastOutput.toLowerCase().includes("no questionnaires available");
         
-        if (idleIssue) {
+        if (hasIdleKeywords) {
           writeIdleTodayMarker();
           log("info", "writing idle_today marker — no surveys available for this platform today");
           finishClean(EXIT_IDLE_NO_SURVEYS);
