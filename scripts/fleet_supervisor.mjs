@@ -102,6 +102,7 @@ let lastEarningsSyncDate = null; // YYYY-MM-DD string of last sync date
 const restarts = new Map(); // port -> [timestamp ms, ...]
 const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
 const targetPorts = new Set(); // target-reached marker found: never restart again
+const idleTodayPorts = new Set(); // idle-today marker found: no surveys for today
 
 // --- helpers ---
 function iso() {
@@ -170,6 +171,14 @@ function findMarker(dir, re) {
 
 function hasTargetMarker(port) {
   const re = new RegExp(`^${port}_target_reached_.*\\.json$`);
+  return findMarker(INBOX, re) || findMarker(PROCESSED, re);
+}
+
+// --- idle-today marker (fact 4): `${port}_idle_today_*.json` in reports/inbox/
+// Indicates the agent exhausted its nudge budget because no surveys are available
+// for this platform today. Supervisor should not restart for the rest of the day.
+function hasIdleTodayMarker(port) {
+  const re = new RegExp(`^${port}_idle_today_.*\\.json$`);
   return findMarker(INBOX, re) || findMarker(PROCESSED, re);
 }
 
@@ -543,6 +552,18 @@ async function tick() {
         }
       }
       if (targetPorts.has(port)) continue;
+
+      // (a2) idle-today marker? skip for the rest of today (log once).
+      if (!idleTodayPorts.has(port) && hasIdleTodayMarker(port)) {
+        idleTodayPorts.add(port);
+        appendSupervisorLog({
+          ts: iso(),
+          port,
+          action: "skipped_idle_today",
+          note: "idle-today marker present; no surveys available for this platform today",
+        });
+      }
+      if (idleTodayPorts.has(port)) continue;
 
       // (b0) fail-closed auto-fix state (attempt cap exhausted / backoff): do not burn
       // restart budget on a port the auto-fixer is already pacing.

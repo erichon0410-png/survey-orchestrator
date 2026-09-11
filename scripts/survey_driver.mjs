@@ -29,11 +29,17 @@
 // LIFECYCLE / EXIT CODES:
 //   0     = clean (target reached, or graceful SIGTERM shutdown)
 //   3     = fail-closed tech_issue (nudge budget exhausted, no thread id, spawn/read failure)
+//   4     = idle — no surveys available today; supervisor should not restart for the day
 //   other = terminated by signal (SIGTERM -> 143)
 //
 // stdlib only (node:fs, node:path, node:child_process). Node >= 18.
 
 import fs from "node:fs";
+
+// Exit code constants
+const EXIT_OK = 0;
+const EXIT_TECH_ISSUE = 3;
+const EXIT_IDLE_NO_SURVEYS = 4;
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -171,6 +177,43 @@ function ensureDirs() {
 function appendStatus(obj) {
   try { fs.appendFileSync(STATUS_JSONL, JSON.stringify({ ts: ts(), port: PORT, ...obj }) + "\n", "utf-8"); }
   catch (e) { log("warn", "appendStatus failed", { err: String(e) }); }
+}
+
+// ---------- idle-today detection (no surveys available) ----------
+
+function readLastTechIssue() {
+  const statusFile = STATUS_JSONL;
+  try {
+    if (!fs.existsSync(statusFile)) return null;
+    const content = fs.readFileSync(statusFile, "utf-8");
+    const lines = content.trim().split("\n");
+    // Search backwards for the most recent tech_issue_reported event
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry.event === "tech_issue_reported") return entry;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+function writeIdleTodayMarker() {
+  const now = new Date();
+  const yyyymmdd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const markerPath = path.join(REPORTS_INBOX, `${PORT}_idle_today_${yyyymmdd}.json`);
+  try {
+    fs.writeFileSync(markerPath, JSON.stringify({
+      port: PORT,
+      ts: now.toISOString(),
+      type: "idle_today",
+      reason: "no surveys available for this platform today",
+      date: yyyymmdd
+    }));
+    log("info", "wrote idle_today marker", { path: markerPath });
+  } catch (e) {
+    log("warn", "could not write idle_today marker", { err: String(e) });
+  }
 }
 
 // ---------- target-reached detection with baseline delta tracking ----------
@@ -568,17 +611,35 @@ async function main() {
     } else {
       // Bounded nudge budget: fail closed once we've spent all nudges and still have no target.
       if (state.nudgesUsed >= MAX_NUDGES) {
-        log("warn", "nudge budget exhausted without target -> fail-closed tech_issue");
-        writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
-        if (pub) {
-          pub.publish({
-            source: "driver",
-            port: PORT,
-            event: "tech_issue",
-            message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
-          });
+        log("warn", "nudge budget exhausted without target -> fail-closed");
+        
+        // Check if the last tech issue indicates a permanent idle state (no surveys available)
+        // vs. a transient tech issue that might resolve on retry.
+        const lastIssue = readLastTechIssue();
+        const isIdleCondition = lastIssue && (
+          lastIssue.note?.toLowerCase().includes("no surveys") ||
+          lastIssue.note?.toLowerCase().includes("empty questionnaire") ||
+          lastIssue.note?.toLowerCase().includes("no questionnaires") ||
+          lastIssue.note?.toLowerCase().includes("no surveys available")
+        );
+        
+        if (isIdleCondition) {
+          // Write an idle_today marker so the supervisor doesn't restart this port today.
+          writeIdleTodayMarker();
+          log("info", "writing idle_today marker — no surveys available for this platform today");
+          finishClean(EXIT_IDLE_NO_SURVEYS);
+        } else {
+          writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
+          if (pub) {
+            pub.publish({
+              source: "driver",
+              port: PORT,
+              event: "tech_issue",
+              message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
+            });
+          }
+          finishClean(3);
         }
-        finishClean(3);
         return;
       }
       state.nudgesUsed++; // this resume is nudge #state.nudgesUsed
