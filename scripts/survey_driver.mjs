@@ -683,16 +683,32 @@ async function main() {
       sessionId = res.threadId || null;
       if (!sessionId) {
         log("warn", "no thread_id captured from initial turn");
-        writeTechIssue("no_thread_id", `codex exec turn 1 ended (code=${res.code}) without a thread.started event; cannot resume`);
-        if (pub) {
-          pub.publish({
-            source: "driver",
-            port: PORT,
-            event: "tech_issue",
-            message: `no thread_id captured from initial turn (code ${res.code})`,
-          });
+        
+        // Check if this is an idle condition (no surveys available) vs. transient failure
+        const lastIssue = readLastTechIssue();
+        const isIdleCondition = lastIssue && (
+          lastIssue.note?.toLowerCase().includes("no surveys") ||
+          lastIssue.note?.toLowerCase().includes("empty questionnaire") ||
+          lastIssue.note?.toLowerCase().includes("no questionnaires") ||
+          lastIssue.note?.toLowerCase().includes("no surveys available")
+        );
+        
+        if (isIdleCondition) {
+          writeIdleTodayMarker();
+          log("info", "writing idle_today marker — no surveys available for this platform today");
+          finishClean(EXIT_IDLE_NO_SURVEYS);
+        } else {
+          writeTechIssue("no_thread_id", `codex exec turn 1 ended (code=${res.code}) without a thread.started event; cannot resume`);
+          if (pub) {
+            pub.publish({
+              source: "driver",
+              port: PORT,
+              event: "tech_issue",
+              message: `no thread_id captured from initial turn (code ${res.code})`,
+            });
+          }
+          finishClean(3);
         }
-        finishClean(3);
         return;
       }
     }
