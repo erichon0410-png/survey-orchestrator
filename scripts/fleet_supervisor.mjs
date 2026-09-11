@@ -29,6 +29,7 @@ import { execSync } from "node:child_process";
 import { syncEarnings } from "./earnings_sync.mjs";
 import { createAutoFixer } from "./auto_fixer.mjs";
 import { driverKillPattern } from "./driver_kill.mjs";
+import { createEventHub } from "./observability_hub.mjs";
 
 // Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
 // Override with SURVEY_ROOT if the checkout lives elsewhere.
@@ -43,6 +44,35 @@ const LOGS_DIR = path.join(ROOT, "logs");
 const INBOX = path.join(ROOT, "reports", "inbox");
 const PROCESSED = path.join(ROOT, "reports", "processed");
 const SUPERVISOR_LOG = path.join(LOGS_DIR, "supervisor.log");
+const SOCK_PATH = process.env.FLEET_SOCK_PATH || path.join(LOGS_DIR, "fleet-observability.sock");
+const JOURNAL_PATH = path.join(LOGS_DIR, "fleet_events.jsonl");
+
+let eventHub = null;
+export async function initEventHub(options = {}) {
+  const sock = options.sockPath || process.env.FLEET_SOCK_PATH || SOCK_PATH;
+  const journal = options.journalPath || JOURNAL_PATH;
+  if (!eventHub) {
+    eventHub = createEventHub({ sockPath: sock, journalPath: journal });
+    try {
+      await eventHub.start();
+    } catch (e) {
+      console.error(`supervisor: failed to start EventHub: ${String(e)}`);
+    }
+  }
+  return eventHub;
+}
+
+export function publishSupervisorEvent(event, message, detail = null) {
+  if (eventHub) {
+    eventHub.publish({
+      source: "supervisor",
+      port: null,
+      event,
+      message,
+      detail,
+    });
+  }
+}
 
 // Bounded runtime self-heal (scripts/auto_fixer.mjs): container-down / CDP-offline /
 // driver-dead detection with idempotent remediation, attempt caps, backoff cooldowns,
@@ -196,6 +226,7 @@ function capPort(port) {
       }) + "\n",
       "utf-8"
     );
+    publishSupervisorEvent("restart_cap", `port ${port} paused for repair (restart cap reached; cooldown ${cooldownMin}m)`, { port, cooldownMin });
   } catch (e) {
     appendSupervisorLog({ ts, port, action: "cap_inbox_write_failed", error: String(e) });
   }
@@ -407,6 +438,7 @@ function checkIdleTimeouts(psLines) {
       // Kill the agent process
       try {
         execSync(`pkill -f "${driverKillPattern(port)}" || true`);
+        publishSupervisorEvent("idle_timeout_terminate", `port ${port} terminated: no earnings for ${idleMinutes}m`, { port, idleMinutes });
       } catch (e) {
         appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
       }
@@ -418,6 +450,7 @@ function checkIdleTimeouts(psLines) {
 async function tick() {
   const alivePorts = [];
   const restartedPorts = [];
+  publishSupervisorEvent("tick_started", "supervisor tick started; checking fleet");
   try {
     // --- Daily earnings sync & graph refresh at 7:00 AM ---
     const now = new Date();
@@ -467,6 +500,9 @@ async function tick() {
         failed: autofix.failed,
         cooldown: autofix.cooldown,
       });
+      if (autofix.repaired && autofix.repaired.length > 0) {
+        publishSupervisorEvent("autofix_repaired", `autofix repaired ports: [${autofix.repaired.join(",")}]`, { repaired: autofix.repaired });
+      }
     } catch (e) {
       appendSupervisorLog({ ts: iso(), event: "autofix_tick_failed", error: String(e) });
     }
@@ -573,6 +609,7 @@ async function tick() {
       }
       if (res && res.ok === true) {
         appendSupervisorLog({ ts: iso(), port, action: "restarted", pid: res.pid });
+        publishSupervisorEvent("agent_redeploy", `port ${port} redeployed (PID ${res.pid})`, { port, pid: res.pid });
         restartedPorts.push(port);
       } else {
         const err = res && (res.error ?? res);
@@ -592,43 +629,28 @@ async function tick() {
     console.log(
       `supervisor tick ${iso()} alive:[${alivePorts.join(",")}] restarted:[${restartedPorts.join(",")}]`
     );
+    publishSupervisorEvent("tick_completed", `tick completed: ${alivePorts.length} alive [${alivePorts.join(",")}], ${restartedPorts.length} redeployed [${restartedPorts.join(",")}]`, { alivePorts, restartedPorts });
   } catch {}
 }
 
 // --- startup ---
 fs.mkdirSync(LOGS_DIR, { recursive: true });
-fs.mkdirSync(INBOX, { recursive: true });
-appendSupervisorLog({ ts: iso(), event: "supervisor_started", pid: process.pid });
-
 let stopping = false;
-function shutdown() {
+async function shutdown() {
   if (stopping) return;
   stopping = true;
   try {
+    publishSupervisorEvent("supervisor_stopped", "supervisor stopped");
     appendSupervisorLog({ ts: iso(), event: "supervisor_stopped" });
+    if (eventHub) await eventHub.stop();
   } catch {}
   process.exit(0);
 }
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGHUP", () => {});
-
-process.on("uncaughtException", (e) => {
-  if (e && (e.code === "EPIPE" || String(e).includes("EPIPE"))) return;
-  appendSupervisorLog({ ts: iso(), event: "uncaught_exception", error: String(e) });
-});
-process.on("unhandledRejection", (e) => {
-  appendSupervisorLog({
-    ts: iso(),
-    event: "unhandled_rejection",
-    error: String(e && e.stack ? e.stack : e),
-  });
-});
 
 // First tick immediately, then every POLL_MS. A tick that is still running when
 // the interval fires is skipped (never two overlapping ticks).
 let ticking = false;
-async function guardedTick() {
+export async function guardedTick() {
   if (ticking) return;
   ticking = true;
   try {
@@ -638,9 +660,35 @@ async function guardedTick() {
   }
 }
 
-await guardedTick();
-setInterval(() => {
-  guardedTick().catch((e) => {
-    appendSupervisorLog({ ts: iso(), event: "tick_error", error: String(e) });
+const isCLI = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isCLI) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+  fs.mkdirSync(INBOX, { recursive: true });
+  appendSupervisorLog({ ts: iso(), event: "supervisor_started", pid: process.pid });
+  await initEventHub();
+  publishSupervisorEvent("supervisor_started", `fleet supervisor started (PID ${process.pid})`);
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("SIGHUP", () => {});
+
+  process.on("uncaughtException", (e) => {
+    if (e && (e.code === "EPIPE" || String(e).includes("EPIPE"))) return;
+    appendSupervisorLog({ ts: iso(), event: "uncaught_exception", error: String(e) });
   });
-}, POLL_MS);
+  process.on("unhandledRejection", (e) => {
+    appendSupervisorLog({
+      ts: iso(),
+      event: "unhandled_rejection",
+      error: String(e && e.stack ? e.stack : e),
+    });
+  });
+
+  await guardedTick();
+  setInterval(() => {
+    guardedTick().catch((e) => {
+      appendSupervisorLog({ ts: iso(), event: "tick_error", error: String(e) });
+    });
+  }, POLL_MS);
+}
