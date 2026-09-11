@@ -198,6 +198,32 @@ function readLastTechIssue() {
   return null;
 }
 
+// Search through all tech issues for one that indicates an idle condition
+function findIdleConditionTechIssue() {
+  const statusFile = STATUS_JSONL;
+  try {
+    if (!fs.existsSync(statusFile)) return null;
+    const content = fs.readFileSync(statusFile, "utf-8");
+    const lines = content.trim().split("\n");
+    // Search backwards for the most recent tech_issue_reported event with idle keywords
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry.event === "tech_issue_reported" && entry.note) {
+          const note = entry.note.toLowerCase();
+          if (note.includes("no surveys") || 
+              note.includes("empty questionnaire") || 
+              note.includes("no questionnaires") || 
+              note.includes("no surveys available")) {
+            return entry;
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 function writeIdleTodayMarker() {
   const now = new Date();
   const yyyymmdd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
@@ -613,22 +639,15 @@ async function main() {
       if (state.nudgesUsed >= MAX_NUDGES) {
         log("warn", "nudge budget exhausted without target -> fail-closed");
         
-        // Check if the last tech issue indicates a permanent idle state (no surveys available)
+        // Check if any recent tech issue indicates a permanent idle state (no surveys available)
         // vs. a transient tech issue that might resolve on retry.
-        const lastIssue = readLastTechIssue();
+        const idleIssue = findIdleConditionTechIssue();
         log("debug", "checking for idle condition", { 
-          hasLastIssue: !!lastIssue, 
-          note: lastIssue?.note || "none" 
+          hasIdleIssue: !!idleIssue, 
+          note: idleIssue?.note || "none" 
         });
-        const isIdleCondition = lastIssue && (
-          lastIssue.note?.toLowerCase().includes("no surveys") ||
-          lastIssue.note?.toLowerCase().includes("empty questionnaire") ||
-          lastIssue.note?.toLowerCase().includes("no questionnaires") ||
-          lastIssue.note?.toLowerCase().includes("no surveys available")
-        );
-        log("debug", "idle condition check result", { isIdleCondition });
         
-        if (isIdleCondition) {
+        if (idleIssue) {
           // Write an idle_today marker so the supervisor doesn't restart this port today.
           writeIdleTodayMarker();
           log("info", "writing idle_today marker — no surveys available for this platform today");
@@ -690,15 +709,9 @@ async function main() {
         log("warn", "no thread_id captured from initial turn");
         
         // Check if this is an idle condition (no surveys available) vs. transient failure
-        const lastIssue = readLastTechIssue();
-        const isIdleCondition = lastIssue && (
-          lastIssue.note?.toLowerCase().includes("no surveys") ||
-          lastIssue.note?.toLowerCase().includes("empty questionnaire") ||
-          lastIssue.note?.toLowerCase().includes("no questionnaires") ||
-          lastIssue.note?.toLowerCase().includes("no surveys available")
-        );
+        const idleIssue = findIdleConditionTechIssue();
         
-        if (isIdleCondition) {
+        if (idleIssue) {
           writeIdleTodayMarker();
           log("info", "writing idle_today marker — no surveys available for this platform today");
           finishClean(EXIT_IDLE_NO_SURVEYS);
