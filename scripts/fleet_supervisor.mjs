@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { syncEarnings } from "./earnings_sync.mjs";
 import { createAutoFixer } from "./auto_fixer.mjs";
+import { driverKillPattern } from "./driver_kill.mjs";
 
 // Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
 // Override with SURVEY_ROOT if the checkout lives elsewhere.
@@ -298,7 +299,7 @@ function checkAuthTimeouts(psLines) {
               
               // Kill the agent process
               try {
-                execSync(`pkill -f "survey_driver.*port=${port}" || true`);
+                execSync(`pkill -f "${driverKillPattern(port)}" || true`);
               } catch (e) {
                 appendSupervisorLog({ ts: iso(), port, action: "auth_kill_failed", error: String(e) });
               }
@@ -405,7 +406,7 @@ function checkIdleTimeouts(psLines) {
       
       // Kill the agent process
       try {
-        execSync(`pkill -f "survey_driver.*port=${port}" || true`);
+        execSync(`pkill -f "${driverKillPattern(port)}" || true`);
       } catch (e) {
         appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
       }
