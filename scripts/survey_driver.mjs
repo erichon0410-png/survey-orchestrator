@@ -37,6 +37,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createEventPublisher } from "./observability_hub.mjs";
+import { normalizeCodexLine } from "./fleet_events.mjs";
 
 // ---------- arg / env parsing ----------
 function parseArgs(argv) {
@@ -71,7 +73,17 @@ const INBOX = path.join(WS, "reports", "inbox");
 const PROCESSED = path.join(WS, "reports", "processed");
 const STATUS_JSONL = path.join(LOGS_DIR, `agent_${PORT}_status.jsonl`);
 const AGENT_LOG = path.join(LOGS_DIR, `agent_${PORT}.log`);
+const AGENT_STDERR_LOG = path.join(LOGS_DIR, `agent_${PORT}.stderr.log`);
+const SOCK_PATH = process.env.FLEET_SOCK_PATH || path.join(LOGS_DIR, "fleet-observability.sock");
 const MARKER = args.marker || `codex exec bound port ${PORT}`;
+
+let publisher = null;
+export function getPublisher() {
+  if (!publisher && PORT) {
+    publisher = createEventPublisher({ sockPath: SOCK_PATH, port: PORT });
+  }
+  return publisher;
+}
 
 // ---------- earnings rate table (from config/earnings_rates.yaml, inlined for no-dep) ----------
 const RATE_TABLE = {
@@ -257,10 +269,82 @@ function writeTechIssue(reason, detail) {
 }
 
 // ---------- shared mutable state (module scope; read by signal handlers + main loop) ----------
-const state = { child: null, logFd: null, nudgesUsed: 0, turn: 0, stopping: false };
+const state = { child: null, nudgesUsed: 0, turn: 0, stopping: false };
 
 function isResumeTurn() { return state.turn >= 2; }
 function sigNum(s) { return { SIGTERM: 15, SIGKILL: 9, SIGINT: 2 }[s] || 0; }
+
+// ---------- codex child stdio stream setup (separates stdout JSONL from stderr) ----------
+export function setupCodexStreams({
+  child,
+  stdoutPath,
+  stderrPath,
+  port,
+  publisher,
+  onThreadId,
+}) {
+  const stdoutFd = fs.openSync(stdoutPath, "a");
+  const stderrFd = fs.openSync(stderrPath, "a");
+  let stdoutBuf = "";
+  let stderrBuf = "";
+
+  if (child.stdout) {
+    child.stdout.on("data", (chunk) => {
+      try { fs.writeSync(stdoutFd, chunk); } catch {}
+      stdoutBuf += chunk.toString("utf-8");
+      let idx;
+      while ((idx = stdoutBuf.indexOf("\n")) !== -1) {
+        const line = stdoutBuf.slice(0, idx).trim();
+        stdoutBuf = stdoutBuf.slice(idx + 1);
+        if (line) {
+          if (onThreadId && (line.includes("thread_id") || line.includes("thread.started"))) {
+            try {
+              const d = JSON.parse(line);
+              if (d.thread_id) onThreadId(d.thread_id);
+            } catch {}
+          }
+          if (publisher) {
+            const ev = normalizeCodexLine(line, port);
+            if (ev) publisher.publish(ev);
+          }
+        }
+      }
+    });
+  }
+
+  if (child.stderr) {
+    child.stderr.on("data", (chunk) => {
+      try { fs.writeSync(stderrFd, chunk); } catch {}
+      stderrBuf += chunk.toString("utf-8");
+      let idx;
+      while ((idx = stderrBuf.indexOf("\n")) !== -1) {
+        const line = stderrBuf.slice(0, idx).trim();
+        stderrBuf = stderrBuf.slice(idx + 1);
+        if (line && (line.toLowerCase().includes("error") || line.toLowerCase().includes("fatal"))) {
+          if (publisher) {
+            publisher.publish({
+              source: "codex",
+              port,
+              event: "error",
+              message: `stderr: ${line.slice(0, 200)}`,
+            });
+          }
+        }
+      }
+    });
+  }
+
+  return {
+    close() {
+      if (stdoutBuf.trim() && publisher) {
+        const ev = normalizeCodexLine(stdoutBuf.trim(), port);
+        if (ev) publisher.publish(ev);
+      }
+      try { fs.closeSync(stdoutFd); } catch {}
+      try { fs.closeSync(stderrFd); } catch {}
+    },
+  };
+}
 
 // ---------- run one codex turn to completion; resolves {code, signal, threadId} ----------
 function runTurn(argsArr) {
@@ -269,25 +353,44 @@ function runTurn(argsArr) {
     const done = (r) => { if (!settled) { settled = true; resolve(r); } };
 
     let child;
+    let streams = null;
+    let liveThreadId = null;
+
     try {
-      // Reuse the single open log fd (opened once at driver start, "w") for every turn so all turns
-      // accumulate in agent_<PORT>.log. A numeric fd in stdio is dup'd into the child by Node.
-      child = spawn("codex", argsArr, { cwd: WS, stdio: ["ignore", state.logFd, state.logFd] });
+      // Spawn codex with separated stdout (JSONL) and stderr (text/warnings).
+      child = spawn("codex", argsArr, { cwd: WS, stdio: ["ignore", "pipe", "pipe"] });
+      streams = setupCodexStreams({
+        child,
+        stdoutPath: AGENT_LOG,
+        stderrPath: AGENT_STDERR_LOG,
+        port: PORT,
+        publisher: getPublisher(),
+        onThreadId: (tid) => { liveThreadId = tid; },
+      });
     } catch (e) {
+      if (streams) streams.close();
       return done({ code: -1, signal: null, threadId: null, spawnError: String(e) });
     }
 
     const onExit = (code, signal) => {
       clearTimeout(timer);
-      let threadId = null;
-      if (!isResumeTurn()) { try { threadId = extractThreadId(AGENT_LOG); } catch {} }
+      if (streams) {
+        try { streams.close(); } catch {}
+      }
+      let threadId = liveThreadId;
+      if (!threadId && !isResumeTurn()) { try { threadId = extractThreadId(AGENT_LOG); } catch {} }
       done({ code: code ?? (signal ? 128 + sigNum(signal) : 0), signal, threadId });
     };
     child.on("exit", onExit);
-    child.on("error", (e) => { clearTimeout(timer); done({ code: -1, signal: null, threadId: null, spawnError: String(e) }); });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      if (streams) {
+        try { streams.close(); } catch {}
+      }
+      done({ code: -1, signal: null, threadId: null, spawnError: String(e) });
+    });
 
-    // Per-turn watchdog: a turn that never exits is still bounded. On trip, SIGTERM then force-kill,
-    // which resolves the promise via onExit so the loop can nudge / fail-closed.
+    // Per-turn watchdog: a turn that never exits is still bounded.
     const timer = setTimeout(() => {
       log("warn", "turn watchdog: no exit within timeout; sending SIGTERM to codex child", { turn: state.turn });
       try { child.kill("SIGTERM"); } catch {}
@@ -308,7 +411,9 @@ function onSignal(sig) {
 }
 
 function finishClean(code) {
-  try { if (state.logFd != null) fs.closeSync(state.logFd); } catch {}
+  try {
+    if (publisher) publisher.close();
+  } catch {}
   process.exit(code);
 }
 
@@ -316,8 +421,19 @@ async function main() {
   if (!PORT) { log("error", "missing --port"); process.exit(3); }
   ensureDirs();
 
-  // Open the codex-output log once (truncate) and keep it open for all turns.
-  state.logFd = fs.openSync(AGENT_LOG, "w");
+  // Reset/truncate logs on fresh driver deployment
+  try { fs.writeFileSync(AGENT_LOG, "", "utf-8"); } catch {}
+  try { fs.writeFileSync(AGENT_STDERR_LOG, "", "utf-8"); } catch {}
+
+  const pub = getPublisher();
+  if (pub) {
+    pub.publish({
+      source: "driver",
+      port: PORT,
+      event: "driver_started",
+      message: `driver started for port ${PORT}`,
+    });
+  }
 
   // Load the full prompt (base + BINDING) that deployAgent materialized to a temp file.
   let promptText;
@@ -326,6 +442,14 @@ async function main() {
   } catch (e) {
     log("error", "cannot read prompt file", { path: args.promptFile, err: String(e) });
     writeTechIssue("prompt_file_unreadable", String(e));
+    if (pub) {
+      pub.publish({
+        source: "driver",
+        port: PORT,
+        event: "tech_issue",
+        message: `prompt file unreadable: ${String(e)}`,
+      });
+    }
     finishClean(3);
     return;
   }
@@ -343,7 +467,19 @@ async function main() {
     const turn = state.turn;
 
     // Terminal check before each spawn: if the target marker already exists, stop cleanly.
-    if (targetReached()) { log("info", "target_reached marker present -> clean exit"); finishClean(0); return; }
+    if (targetReached()) {
+      log("info", "target_reached marker present -> clean exit");
+      if (pub) {
+        pub.publish({
+          source: "driver",
+          port: PORT,
+          event: "target_reached",
+          message: `port ${PORT} target reached -> clean exit`,
+        });
+      }
+      finishClean(0);
+      return;
+    }
 
     let argsArr;
     if (!sessionId) {
@@ -353,25 +489,67 @@ async function main() {
       if (state.nudgesUsed >= MAX_NUDGES) {
         log("warn", "nudge budget exhausted without target -> fail-closed tech_issue");
         writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
+        if (pub) {
+          pub.publish({
+            source: "driver",
+            port: PORT,
+            event: "tech_issue",
+            message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
+          });
+        }
         finishClean(3);
         return;
       }
       state.nudgesUsed++; // this resume is nudge #state.nudgesUsed
+      if (pub) {
+        pub.publish({
+          source: "driver",
+          port: PORT,
+          event: "nudge",
+          message: `nudge ${state.nudgesUsed}/${MAX_NUDGES} sent to port ${PORT}`,
+        });
+      }
       // Order MUST be `resume [OPTIONS] [SESSION_ID] [PROMPT]` (see `codex exec resume --help`):
-      // all flags BEFORE the positional session id and prompt.
       argsArr = ["exec", "resume", ...codexBaseFlags, sessionId, NUDGE];
     }
 
     log("info", `turn ${turn} starting`, { kind: sessionId ? "resume" : "initial", nudgesUsed: state.nudgesUsed, maxNudges: MAX_NUDGES });
+    if (pub) {
+      pub.publish({
+        source: "driver",
+        port: PORT,
+        event: "turn_started",
+        message: `turn ${turn} starting (${sessionId ? "resume" : "initial"})`,
+        detail: { turn, kind: sessionId ? "resume" : "initial" },
+      });
+    }
+
     const res = await runTurn(argsArr);
     state.child = null;
     log("info", `turn ${turn} ended`, { code: res.code, signal: res.signal ?? null, threadId: res.threadId ?? null });
+    if (pub) {
+      pub.publish({
+        source: "driver",
+        port: PORT,
+        event: "turn_ended",
+        message: `turn ${turn} ended (code ${res.code})`,
+        detail: { turn, code: res.code, threadId: res.threadId },
+      });
+    }
 
     if (turn === 1) {
       sessionId = res.threadId || null;
       if (!sessionId) {
         log("warn", "no thread_id captured from initial turn");
         writeTechIssue("no_thread_id", `codex exec turn 1 ended (code=${res.code}) without a thread.started event; cannot resume`);
+        if (pub) {
+          pub.publish({
+            source: "driver",
+            port: PORT,
+            event: "tech_issue",
+            message: `no thread_id captured from initial turn (code ${res.code})`,
+          });
+        }
         finishClean(3);
         return;
       }
