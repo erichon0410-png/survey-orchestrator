@@ -210,12 +210,17 @@ function findIdleConditionTechIssue() {
     const lines = content.trim().split("\n");
     log("debug", `findIdleConditionTechIssue: scanning ${lines.length} lines`);
     // Search backwards for the most recent tech_issue_reported event with idle keywords
+    let foundAnyTechIssue = false;
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
         if (entry.event === "tech_issue_reported") {
+          foundAnyTechIssue = true;
           const note = entry.note ? entry.note.toLowerCase() : "";
-          log("debug", `findIdleConditionTechIssue: checking tech issue at line ${i}`, { note });
+          log("debug", `findIdleConditionTechIssue: checking tech issue at line ${i}`, { 
+            reason: entry.reason, 
+            note: entry.note || "(null)" 
+          });
           if (note.includes("no surveys") || 
               note.includes("empty questionnaire") || 
               note.includes("no questionnaires") || 
@@ -228,7 +233,11 @@ function findIdleConditionTechIssue() {
         log("debug", `findIdleConditionTechIssue: parse error at line ${i}`, { err: String(e) });
       }
     }
-    log("debug", "findIdleConditionTechIssue: no idle condition found");
+    if (!foundAnyTechIssue) {
+      log("debug", "findIdleConditionTechIssue: no tech issues found in status log");
+    } else {
+      log("debug", "findIdleConditionTechIssue: scanned all tech issues, none matched idle keywords");
+    }
   } catch (e) {
     log("debug", "findIdleConditionTechIssue: exception", { err: String(e) });
   }
