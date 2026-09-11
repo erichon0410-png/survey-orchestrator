@@ -616,12 +616,17 @@ async function main() {
         // Check if the last tech issue indicates a permanent idle state (no surveys available)
         // vs. a transient tech issue that might resolve on retry.
         const lastIssue = readLastTechIssue();
+        log("debug", "checking for idle condition", { 
+          hasLastIssue: !!lastIssue, 
+          note: lastIssue?.note || "none" 
+        });
         const isIdleCondition = lastIssue && (
           lastIssue.note?.toLowerCase().includes("no surveys") ||
           lastIssue.note?.toLowerCase().includes("empty questionnaire") ||
           lastIssue.note?.toLowerCase().includes("no questionnaires") ||
           lastIssue.note?.toLowerCase().includes("no surveys available")
         );
+        log("debug", "idle condition check result", { isIdleCondition });
         
         if (isIdleCondition) {
           // Write an idle_today marker so the supervisor doesn't restart this port today.
