@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createSuiteLock } from "./lib/suite_lock.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
+
+// Private per-process inbox: `node --test` runs test files in parallel processes and
+// the real reports/inbox/ is shared; a private temp dir eliminates marker-move races.
+// Lives under reports/ (same filesystem) because syncEarnings rename()s markers into
+// reports/processed/, which fails cross-device (EXDEV on WSL /tmp).
+const tmpInboxRoot = fs.mkdtempSync(path.join(ROOT, "reports", ".test_inbox_drop-"));
+const testInbox = path.join(tmpInboxRoot, "inbox");
+fs.mkdirSync(testInbox, { recursive: true });
+
+// Serialize this process's shared-ledger section against the other parallel suites.
+const suiteLock = createSuiteLock(path.join(ROOT, "reports", ".suite_ledger.lock"));
 
 // Regression: a balance DROP (a redemption happened) must be recorded as a new
 // snapshot at the TRUE reported balance — not clamped back up to the previous
@@ -16,29 +28,17 @@ import { appendSnapshot, readAll } from "../scripts/earnings_ledger.mjs";
 
 console.log("=== earnings_sync: a redemption (balance drop) is recorded ===");
 
+await suiteLock.acquire();
+try {
 {
-  const testInbox = path.join(ROOT, "reports", "inbox");
   const testProcessed = path.join(ROOT, "reports", "processed");
   const testSeenFile = path.join(ROOT, "reports", ".test_drop_seen.json");
   const markerName = "9998_target_reached_20260905_120000.json";
   const markerPath = path.join(testInbox, markerName);
   const account = "_test:drop@example.com";
-  const holdDir = path.join(ROOT, "reports", ".test_drop_inbox_hold");
-  const heldMarkers = [];
 
   try {
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
-
-    // Isolate the shared inbox so the "exactly one snapshot" contract holds even
-    // when real pending *_target_reached_*.json markers are present. Moved aside
-    // here, restored in finally (same isolation as test_earnings_sync.mjs).
-    fs.mkdirSync(holdDir, { recursive: true });
-    for (const f of fs.readdirSync(testInbox)) {
-      if (f.endsWith(".json") && f !== markerName) {
-        fs.renameSync(path.join(testInbox, f), path.join(holdDir, f));
-        heldMarkers.push(f);
-      }
-    }
 
     // Seed a prior HIGHER balance so the marker below is a genuine drop.
     appendSnapshot({ account, port: 9998, platform: "_test", balance_usd: 5.00, note: "seed" });
@@ -72,12 +72,7 @@ console.log("=== earnings_sync: a redemption (balance drop) is recorded ===");
   } finally {
     if (fs.existsSync(markerPath)) fs.unlinkSync(markerPath);
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
-
-    // Restore any pre-existing markers we moved aside, then drop the hold dir.
-    for (const f of heldMarkers) {
-      try { fs.renameSync(path.join(holdDir, f), path.join(testInbox, f)); } catch {}
-    }
-    if (fs.existsSync(holdDir)) fs.rmSync(holdDir, { recursive: true, force: true });
+    fs.rmSync(tmpInboxRoot, { recursive: true, force: true });
 
     // Clean up _test: rows so the real ledger is left untouched.
     const ledgerPath = path.join(ROOT, "reports", "earnings_ledger.jsonl");
@@ -89,6 +84,9 @@ console.log("=== earnings_sync: a redemption (balance drop) is recorded ===");
       fs.writeFileSync(ledgerPath, cleaned.join("\n") + "\n", "utf-8");
     }
   }
+}
+} finally {
+  suiteLock.release();
 }
 
 console.log("PASS earnings_sync drop recorded");

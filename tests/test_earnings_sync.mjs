@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createSuiteLock } from "./lib/suite_lock.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
+
+// Private per-process inbox: `node --test` runs test files in parallel processes, and
+// the real reports/inbox/ is shared with other suites (and the live supervisor). Using
+// a private temp dir eliminates marker-move races entirely; no hold/restore needed.
+// Lives under reports/ (same filesystem) because syncEarnings rename()s markers into
+// reports/processed/, which fails cross-device (EXDEV on WSL /tmp).
+const tmpInboxRoot = fs.mkdtempSync(path.join(ROOT, "reports", ".test_inbox_sync-"));
+const testInbox = path.join(tmpInboxRoot, "inbox");
+fs.mkdirSync(testInbox, { recursive: true });
+
+// Serialize this process's shared-ledger section against the other parallel suites.
+const suiteLock = createSuiteLock(path.join(ROOT, "reports", ".suite_ledger.lock"));
 
 // Task 1: import parseEarningsRates and loadEarningsRates
 import { parseEarningsRates, loadEarningsRates } from "../scripts/earnings_sync.mjs";
@@ -135,7 +148,6 @@ console.log("\n=== Task 2 Tests: Seen-Set & computeMarkerEarnings ===");
   }
 
   // Test 2.6: scanMarkerFiles finds target_reached markers across inbox and processed
-  const testInbox = path.join(ROOT, "reports", "inbox");
   const testProcessed = path.join(ROOT, "reports", "processed");
   const tmpMarkerName = "3099_target_reached_20260904_999998.json";
   const tmpMarkerPath = path.join(testInbox, tmpMarkerName);
@@ -156,31 +168,20 @@ import { readAll, latestBalances, appendSnapshot } from "../scripts/earnings_led
 
 console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
 
+// Shared-ledger section: serialize against the other parallel suites (they also rewrite
+// reports/earnings_ledger.jsonl in their cleanup, and syncEarnings appends to it).
+await suiteLock.acquire();
+try {
 {
-  const testInbox = path.join(ROOT, "reports", "inbox");
   const testProcessed = path.join(ROOT, "reports", "processed");
   const testSeenFile = path.join(ROOT, "reports", ".test_sync_seen.json");
   const testMarkerName = "9999_target_reached_20260904_111111.json";
   const testMarkerPath = path.join(testInbox, testMarkerName);
-  const holdDir = path.join(ROOT, "reports", ".test_inbox_hold");
-  const heldMarkers = [];
 
   try {
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
 
-    // Isolate the shared inbox so this test's "exactly 1 marker" contract holds
-    // even when real pending markers are present. Moved aside here, restored in
-    // finally. Without this, a stray *_target_reached_*.json left in reports/inbox
-    // (normal pending work) makes syncEarnings process >1 marker and break the count.
-    fs.mkdirSync(holdDir, { recursive: true });
-    for (const f of fs.readdirSync(testInbox)) {
-      if (f.endsWith(".json") && f !== testMarkerName) {
-        fs.renameSync(path.join(testInbox, f), path.join(holdDir, f));
-        heldMarkers.push(f);
-      }
-    }
-
-    // Write synthetic marker with explicit test account
+    // Write synthetic marker with explicit test account (private per-process inbox)
     fs.writeFileSync(
       testMarkerPath,
       JSON.stringify({
@@ -247,12 +248,6 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
   } finally {
     if (fs.existsSync(testMarkerPath)) fs.unlinkSync(testMarkerPath);
     if (fs.existsSync(testSeenFile)) fs.unlinkSync(testSeenFile);
-
-    // Restore any pre-existing markers we moved aside, then drop the hold dir.
-    for (const f of heldMarkers) {
-      try { fs.renameSync(path.join(holdDir, f), path.join(testInbox, f)); } catch {}
-    }
-    if (fs.existsSync(holdDir)) fs.rmSync(holdDir, { recursive: true, force: true });
 
     // Clean up test entries from earnings_ledger.jsonl
     const ledgerPath = path.join(ROOT, "reports", "earnings_ledger.jsonl");
@@ -364,7 +359,6 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
 
   // Test 3.4: Prevent balance double-counting on cumulative markers
   {
-    const testInbox = path.join(ROOT, "reports", "inbox");
     const testProcessed = path.join(ROOT, "reports", "processed");
     const testSeenFile = path.join(ROOT, "reports", ".test_double_count_seen.json");
     const marker1 = path.join(testInbox, "9998_target_reached_20260904_111111.json");
@@ -417,6 +411,11 @@ console.log("\n=== Task 3 Tests: syncEarnings Engine & Idempotency ===");
   }
 
   console.log("✓ Task 3 Passed: syncEarnings Engine & Idempotency");
+}
+} finally {
+  // Private inbox dir is shared by Task 2.6 and all of Task 3; drop it once, here.
+  fs.rmSync(tmpInboxRoot, { recursive: true, force: true });
+  suiteLock.release();
 }
 
 console.log("\n=== Task 4 Tests: Supervisor Integration ===");

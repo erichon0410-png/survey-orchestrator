@@ -12,12 +12,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { createSuiteLock } from "./lib/suite_lock.mjs";
 import {
   appendSnapshot, readAll, latestBalances, latestPlatformBalances, ledgerPath,
 } from "../scripts/earnings_ledger.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ROOT = path.resolve(__dirname, "..");
+
+// Serialize this process's shared-ledger section against the other parallel suites.
+const suiteLock = createSuiteLock(path.join(ROOT, "reports", ".suite_ledger.lock"));
 
 const P1 = "_testplatA";   // platform shared by TWO account keys (the double-count case)
 const P2 = "_testplatB";   // a single-key platform, for contrast
@@ -35,6 +40,8 @@ function cleanup() {
   fs.writeFileSync(p, keep.length ? keep.join("\n") + "\n" : "", "utf-8");
 }
 
+await suiteLock.acquire();
+try {
 try {
   // Deterministic snapshots. P1 appears under two account keys (A1 then A2); A2 is the
   // later append so it must win for platform P1. B1 is a distinct platform P2.
@@ -76,4 +83,7 @@ try {
   console.log("test_platform_dedupe: OK");
 } finally {
   cleanup();
+}
+} finally {
+  suiteLock.release();
 }
