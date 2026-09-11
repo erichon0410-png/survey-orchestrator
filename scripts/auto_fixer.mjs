@@ -8,6 +8,9 @@
 //   container_down -> docker start <container>  -> wait for CDP
 //   cdp_offline    -> relaunch chromium in-container -> wait for CDP
 //   driver_dead    -> redeploy the agent (container + CDP already verified up)
+//   target_reached -> steady state: a valid target-reached marker exists and no
+//                     driver process is expected (the driver exits cleanly by
+//                     design); treated as healthy, never redeployed
 //
 // After CDP is confirmed up, a dead driver is redeployed as part of the same repair.
 //
@@ -49,6 +52,9 @@ export function createAutoFixer(opts) {
   const cdpPollMs = Number(opts.cdpPollMs) > 0 ? Number(opts.cdpPollMs) : DEFAULT_CDP_POLL_MS;
 
   const probes = {
+    // Default: no target-reached knowledge (legacy behavior). The supervisor wires
+    // its hasTargetMarker() so target ports are treated as steady state.
+    hasTargetMarker: () => false,
     startContainer: async (container) => {
       try {
         execSync(`docker start ${container}`, { timeout: 30_000 });
@@ -120,6 +126,17 @@ export function createAutoFixer(opts) {
     return false;
   }
 
+  // Target-reached ports have no persistent driver by design (survey_driver.mjs
+  // exits cleanly when its marker is present), so "no driver process" there is
+  // steady state, not a fault. Mirrors the supervisor deploy loop's convention.
+  function targetReached(item) {
+    try {
+      return !!probes.hasTargetMarker(item.port);
+    } catch {
+      return false;
+    }
+  }
+
   // Detection: first failing layer wins.
   async function assessPort(item) {
     let running = false;
@@ -136,7 +153,7 @@ export function createAutoFixer(opts) {
     try {
       alive = probes.isPortAlive(item.port, psLinesCache);
     } catch {}
-    if (!alive) return "driver_dead";
+    if (!alive) return targetReached(item) ? "target_reached" : "driver_dead";
     return "healthy";
   }
 
@@ -157,6 +174,7 @@ export function createAutoFixer(opts) {
   async function fixPort(item) {
     const state = await assessPort(item);
     if (state === "healthy") return { port: item.port, state: "healthy", ok: true, steps: [] };
+    if (state === "target_reached") return { port: item.port, state: "healthy", ok: true, steps: [] };
 
     const steps = [];
     let cdpUp;
@@ -187,7 +205,9 @@ export function createAutoFixer(opts) {
     try {
       alive = probes.isPortAlive(item.port, psLinesCache);
     } catch {}
-    if (!alive) {
+    // After infra repair, redeploy the driver — unless this is a target-reached
+    // port, where no persistent driver is expected (it would exit immediately).
+    if (!alive && !targetReached(item)) {
       let d = null;
       try {
         d = await probes.deployAgent(item);

@@ -51,7 +51,7 @@ const autoFixer = createAutoFixer({
   root: ROOT,
   inboxDir: INBOX,
   logFile: path.join(LOGS_DIR, "autofix.log"),
-  probes: { isContainerRunning, checkCdp, relaunchChromium, deployAgent, isPortAlive },
+  probes: { isContainerRunning, checkCdp, relaunchChromium, deployAgent, isPortAlive, hasTargetMarker },
 });
 
 const POLL_MS = 30_000;

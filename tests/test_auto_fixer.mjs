@@ -29,7 +29,7 @@ function tmpRoot() {
 }
 
 // --- probes helper -----------------------------------------------------------
-function makeProbes({ containerRunning = true, cdpOk = true, driverAlive = true } = {}) {
+function makeProbes({ containerRunning = true, cdpOk = true, driverAlive = true, hasTargetMarker = () => false } = {}) {
   const calls = { startContainer: 0, relaunchChromium: 0, deployAgent: 0 };
   return {
     calls,
@@ -40,6 +40,7 @@ function makeProbes({ containerRunning = true, cdpOk = true, driverAlive = true 
       relaunchChromium: async () => { calls.relaunchChromium++; return { ok: true }; },
       deployAgent: async () => { calls.deployAgent++; return { ok: true, pid: 4242 }; },
       isPortAlive: () => driverAlive,
+      hasTargetMarker,
     },
   };
 }
@@ -262,6 +263,42 @@ function makeFixer(root, probes, opts = {}) {
   assert.ok(supCode.includes("createAutoFixer"), "fleet_supervisor.mjs must wire in createAutoFixer");
   assert.ok(supCode.includes("autofix"), "fleet_supervisor.mjs must log/report autofix outcomes");
   console.log("PASS T7 supervisor integration contract");
+}
+
+// === T8: target-reached ports are steady state (no redeploy loop) =============
+// A driver on a target-reached port exits cleanly by design (survey_driver.mjs:
+// "target_reached marker present -> clean exit"), so NO persistent driver process
+// is the correct steady state for such ports. The fixer must treat that as healthy
+// and never redeploy in a loop; infra repairs (container/CDP) still apply, only
+// the agent deploy is skipped (a deployed driver would just exit again).
+{
+  const root = tmpRoot();
+  const p = makeProbes({ containerRunning: true, cdpOk: true, driverAlive: false, hasTargetMarker: () => true });
+  const fixer = makeFixer(root, p.probes);
+  await fixer.tick([""]);
+  const res2 = await fixer.tick([""]); // second tick 30s later — same steady state
+  assert.equal(p.calls.deployAgent, 0, "target-reached port with no driver process must NOT be redeployed");
+  assert.ok(res2.healthy.includes(3099), "target-reached steady state is reported healthy, not repaired");
+  console.log("PASS T8a target-reached steady state: no redeploy loop");
+}
+
+{
+  const root = tmpRoot();
+  const p = makeProbes({ containerRunning: false, cdpOk: true, driverAlive: false, hasTargetMarker: () => true });
+  const fixer = makeFixer(root, p.probes);
+  await fixer.tick([""]);
+  assert.equal(p.calls.startContainer, 1, "downed container on a target-reached port still gets started");
+  assert.equal(p.calls.deployAgent, 0, "agent deploy is skipped for target-reached ports (driver would exit immediately)");
+  console.log("PASS T8b container_down + target marker: infra repaired, deploy skipped");
+}
+
+{
+  const root = tmpRoot();
+  const p = makeProbes({ containerRunning: true, cdpOk: true, driverAlive: false }); // hasTargetMarker defaults to () => false
+  const fixer = makeFixer(root, p.probes);
+  await fixer.tick([""]);
+  assert.equal(p.calls.deployAgent, 1, "driver_dead port WITHOUT a target marker is still redeployed");
+  console.log("PASS T8c regression guard: driver_dead without marker still deploys");
 }
 
 console.log("\n=== ALL AUTO-FIXER TESTS PASSED ===");
