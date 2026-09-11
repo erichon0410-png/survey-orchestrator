@@ -12,6 +12,13 @@
 // reports/inbox/<PORT>_restart_cap_active.json file is written. After the cooldown,
 // the hold clears and deployment resumes automatically.
 //
+// Before the deploy loop, each tick runs a bounded auto-fix pass
+// (scripts/auto_fixer.mjs): container-down / CDP-offline / driver-dead detection with
+// idempotent runtime remediation, attempt caps, backoff cooldowns, and fail-closed
+// reports/inbox/<PORT>_autofix_failed.json markers. Fail-closed ports are skipped by
+// the deploy loop so they do not burn restart budget. The auto-fixer writes only
+// reports/ and logs/ — never core source files.
+//
 // Logs: logs/supervisor.log (append-only JSON lines).
 
 import fs from "node:fs";
@@ -20,6 +27,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { syncEarnings } from "./earnings_sync.mjs";
+import { createAutoFixer } from "./auto_fixer.mjs";
 
 // Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
 // Override with SURVEY_ROOT if the checkout lives elsewhere.
@@ -29,11 +37,22 @@ const ROOT = process.env.SURVEY_ROOT || path.resolve(__dirname, "..");
 // The orchestrator plugin lives under the user's home (~/.dsh/...). Resolve it from
 // $HOME so this works on any machine; override with DSH_ORCHESTRATOR if relocated.
 const ORCH_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
-const { FLEET, deployAgent, ensureFleetRunning } = await import(ORCH_PATH);
+const { FLEET, deployAgent, ensureFleetRunning, isContainerRunning, checkCdp, relaunchChromium } = await import(ORCH_PATH);
 const LOGS_DIR = path.join(ROOT, "logs");
 const INBOX = path.join(ROOT, "reports", "inbox");
 const PROCESSED = path.join(ROOT, "reports", "processed");
 const SUPERVISOR_LOG = path.join(LOGS_DIR, "supervisor.log");
+
+// Bounded runtime self-heal (scripts/auto_fixer.mjs): container-down / CDP-offline /
+// driver-dead detection with idempotent remediation, attempt caps, backoff cooldowns,
+// and fail-closed markers. Writes only reports/ and logs/ — never core source files.
+const autoFixer = createAutoFixer({
+  fleet: FLEET,
+  root: ROOT,
+  inboxDir: INBOX,
+  logFile: path.join(LOGS_DIR, "autofix.log"),
+  probes: { isContainerRunning, checkCdp, relaunchChromium, deployAgent, isPortAlive },
+});
 
 const POLL_MS = 30_000;
 const WINDOW_MS = 60 * 60 * 1000; // rolling 60-minute window
@@ -433,8 +452,33 @@ async function tick() {
     // Check for agents stuck on authentication screens — terminate after 30 minutes
     checkAuthTimeouts(psLines);
 
+    // Bounded auto-fix pass: detect container-down / CDP-offline / driver-dead ports and
+    // apply idempotent runtime remediation (docker start, chromium relaunch, agent redeploy).
+    // Fail-closed ports (attempt cap exhausted, in backoff) are skipped by the deploy loop.
+    let fixBlocked = new Set();
+    try {
+      const autofix = await autoFixer.tick(psLines);
+      fixBlocked = new Set([...autofix.failed, ...autofix.cooldown]);
+      appendSupervisorLog({
+        ts: iso(),
+        event: "autofix_tick",
+        repaired: autofix.repaired,
+        failed: autofix.failed,
+        cooldown: autofix.cooldown,
+      });
+    } catch (e) {
+      appendSupervisorLog({ ts: iso(), event: "autofix_tick_failed", error: String(e) });
+    }
+
+    // If the auto-fixer redeployed drivers this tick, refresh the process snapshot so the
+    // deploy loop below does not double-deploy on a stale ps capture.
+    let fleetPsLines = psLines;
+    try {
+      fleetPsLines = execSync("ps -eo pid,args", { encoding: "utf8" }).split("\n");
+    } catch {}
+
     // If any uncompleted port has no alive agent, ensure Docker fleet is running first
-    const hasDeadPorts = FLEET.some((item) => !targetPorts.has(item.port) && !isPortAlive(item.port, psLines));
+    const hasDeadPorts = FLEET.some((item) => !targetPorts.has(item.port) && !isPortAlive(item.port, fleetPsLines));
     if (hasDeadPorts) {
       try {
         await ensureFleetRunning(ROOT);
@@ -463,8 +507,14 @@ async function tick() {
       }
       if (targetPorts.has(port)) continue;
 
+      // (b0) fail-closed auto-fix state (attempt cap exhausted / backoff): do not burn
+      // restart budget on a port the auto-fixer is already pacing.
+      if (fixBlocked.has(port)) {
+        continue;
+      }
+
       // (b) alive? do nothing for this port.
-      if (isPortAlive(port, psLines)) {
+      if (isPortAlive(port, fleetPsLines)) {
         alivePorts.push(port);
         continue;
       }
