@@ -17,6 +17,24 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+// If --live is passed, delegate immediately to the real-time streaming watcher
+if (process.argv.includes("--live")) {
+  const { runWatcher, parseWatcherArgs } = await import("./fleet_watch.mjs");
+  const filteredArgs = process.argv.slice(2).filter((a) => a !== "--live");
+  const opts = parseWatcherArgs(filteredArgs);
+  let runningWatcher = null;
+  runWatcher(opts).then((w) => {
+    runningWatcher = w;
+  });
+  const cleanup = () => {
+    console.log("\n[watcher] detached.");
+    if (runningWatcher) runningWatcher.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+} else {
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INBOX = path.join(ROOT, "reports", "inbox");
 const PROCESSED = path.join(ROOT, "reports", "processed");
@@ -170,3 +188,4 @@ function tick() {
 
 setInterval(tick, POLL_MS);
 tick();
+}
