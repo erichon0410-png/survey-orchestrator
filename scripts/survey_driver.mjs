@@ -209,8 +209,8 @@ function findIdleConditionTechIssue() {
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
-        if (entry.event === "tech_issue_reported" && entry.note) {
-          const note = entry.note.toLowerCase();
+        if (entry.event === "tech_issue_reported") {
+          const note = entry.note ? entry.note.toLowerCase() : "";
           if (note.includes("no surveys") || 
               note.includes("empty questionnaire") || 
               note.includes("no questionnaires") || 
