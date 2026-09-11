@@ -173,7 +173,45 @@ function appendStatus(obj) {
   catch (e) { log("warn", "appendStatus failed", { err: String(e) }); }
 }
 
-// ---------- target-reached detection (mirrors supervisor hasTargetMarker / plugin findMarker) ----------
+// ---------- target-reached detection with baseline delta tracking ----------
+
+/**
+ * Capture the current balance as the baseline for today's run.
+ * This prevents "fake money counts" where lifetime balance triggers premature exit.
+ */
+function captureBaselineBalance() {
+  // Look for any recent status log entry that contains a balance reading
+  const statusFile = STATUS_JSONL;
+  try {
+    if (fs.existsSync(statusFile)) {
+      const content = fs.readFileSync(statusFile, "utf-8");
+      const lines = content.trim().split("\n");
+      // Search backwards for the most recent balance event
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.balance !== undefined && typeof entry.balance === "number") {
+            state.baselineBalance = entry.balance;
+            log("info", "captured baseline balance from status log", { baseline: state.baselineBalance });
+            return;
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    log("warn", "could not read status log for baseline", { err: String(e) });
+  }
+  
+  // Fallback: if no balance found in logs, assume $0 baseline
+  state.baselineBalance = 0.0;
+  log("info", "no prior balance found; using $0.00 as baseline");
+}
+
+/**
+ * Check if the target has been reached by verifying BOTH:
+ * 1. A target_reached marker file exists
+ * 2. The delta (current - baseline) actually meets the daily target
+ */
 function findTargetMarker(dir, re) {
   let entries;
   try { entries = fs.readdirSync(dir); } catch { return false; }
@@ -206,6 +244,7 @@ function targetReached() {
   // Find any matching marker file and validate it
   const markerFile = findTargetMarkerPath(INBOX, re) || findTargetMarkerPath(PROCESSED, re);
   if (!markerFile) return false;
+  
   const result = validateTargetMarker(markerFile);
   if (!result.valid) {
     log("warn", "target_reached marker FAILED validation — treating as not reached (fail-closed)", { file: markerFile, reason: result.reason });
@@ -217,6 +256,41 @@ function targetReached() {
     } catch (e) { log("warn", "could not rename invalid marker", { err: String(e) }); }
     return false;
   }
+  
+  // DELTA-BASED VERIFICATION: Even if the marker is valid, verify that the ACTUAL
+  // earnings delta meets the daily target. This catches the bug where agents write
+  // premature markers based on internal counters or lifetime balance.
+  try {
+    const markerData = JSON.parse(fs.readFileSync(markerFile, "utf-8"));
+    const claimedUsd = markerData.total_usd;
+    
+    if (state.baselineBalance !== null && typeof claimedUsd === "number") {
+      const earnedToday = claimedUsd - state.baselineBalance;
+      
+      if (earnedToday < DAILY_TARGET_USD) {
+        log("warn", "target_reached marker exists but delta is below daily target — treating as not reached", {
+          file: markerFile,
+          claimed_usd: claimedUsd,
+          baseline: state.baselineBalance,
+          earned_today: earnedToday,
+          daily_target: DAILY_TARGET_USD
+        });
+        return false;
+      }
+      
+      log("info", "target_reached marker validated with delta check", {
+        file: markerFile,
+        claimed_usd: claimedUsd,
+        baseline: state.baselineBalance,
+        earned_today: earnedToday,
+        daily_target: DAILY_TARGET_USD
+      });
+    }
+  } catch (e) {
+    log("warn", "could not perform delta verification on marker", { err: String(e) });
+    // Fall through to accept the marker if we can't verify the delta
+  }
+  
   return true;
 }
 
@@ -269,7 +343,10 @@ function writeTechIssue(reason, detail) {
 }
 
 // ---------- shared mutable state (module scope; read by signal handlers + main loop) ----------
-const state = { child: null, nudgesUsed: 0, turn: 0, stopping: false };
+const state = { child: null, nudgesUsed: 0, turn: 0, stopping: false, baselineBalance: null };
+
+// Daily target in USD (from prompt template: $5.00 completion quota per run)
+const DAILY_TARGET_USD = 5.00;
 
 function isResumeTurn() { return state.turn >= 2; }
 function sigNum(s) { return { SIGTERM: 15, SIGKILL: 9, SIGINT: 2 }[s] || 0; }
@@ -424,6 +501,10 @@ async function main() {
   // Reset/truncate logs on fresh driver deployment
   try { fs.writeFileSync(AGENT_LOG, "", "utf-8"); } catch {}
   try { fs.writeFileSync(AGENT_STDERR_LOG, "", "utf-8"); } catch {}
+
+  // Capture baseline balance BEFORE starting any turns to enable delta-based
+  // target verification. This prevents premature exit on stale/lifetime balances.
+  captureBaselineBalance();
 
   const pub = getPublisher();
   if (pub) {
