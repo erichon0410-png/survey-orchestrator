@@ -1,6 +1,6 @@
 # Trusted CDP Mouse Emulation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Implement physical-like mouse clicking via Chrome DevTools Protocol (`Input.dispatchMouseEvent`) across survey agent prompts and CLI control tools to guarantee `event.isTrusted: true` and realistic pointer motion.
 
@@ -30,7 +30,7 @@
   - `options`: `{ lastPos?: { x: number, y: number }, jitterPercent?: number, holdMs?: number, minJitter?: boolean }`
   - Returns: `Promise<{ ok: boolean, x: number, y: number }>`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `tests/test_mouse_helper.mjs`:
 ```javascript
@@ -135,12 +135,12 @@ await asyncCheck("throws when element not found", async () => {
 console.log(`${passed} checks completed.`);
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_mouse_helper.mjs"`
 Expected: FAIL with "Cannot find module '../scripts/mouse_helper.mjs'"
 
-- [ ] **Step 3: Implement `scripts/mouse_helper.mjs`**
+- [x] **Step 3: Implement `scripts/mouse_helper.mjs`**
 
 Create `scripts/mouse_helper.mjs`:
 ```javascript
@@ -210,12 +210,12 @@ export async function dispatchMouseClick(send, target, options = {}) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_mouse_helper.mjs"`
 Expected: PASS (3 checks completed, exit 0)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -235,7 +235,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add scripts/
 - CLI Command: `node scripts/cdp_control.mjs click <port> [--selector <css>] [--coords <x,y>] [--match <url>]`
   - Outputs JSON: `{ ok: true, url: string, x: number, y: number }`
 
-- [ ] **Step 1: Write the unit test for CLI click handling**
+- [x] **Step 1: Write the unit test for CLI click handling**
 
 Create `tests/test_cdp_control_click.mjs`:
 ```javascript
@@ -250,12 +250,12 @@ assert.ok(usageRun.stderr.includes("click"), `Usage message should mention 'clic
 console.log("PASS cdp_control.mjs usage includes click command");
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_cdp_control_click.mjs"`
 Expected: FAIL with "AssertionError: Usage message should mention 'click'"
 
-- [ ] **Step 3: Implement `click` command in `scripts/cdp_control.mjs`**
+- [x] **Step 3: Implement `click` command in `scripts/cdp_control.mjs`**
 
 Modify `scripts/cdp_control.mjs`:
 - Import `dispatchMouseClick` from `./mouse_helper.mjs`.
@@ -267,12 +267,12 @@ Modify `scripts/cdp_control.mjs`:
   - Call `await dispatchMouseClick(send, targetSpec)`.
   - Output result JSON.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_cdp_control_click.mjs"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -293,7 +293,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add scripts/
   - Strict mandate: Rule 3 specifies `await mouseClick(...)`.
   - Strict ban: Disallow `.click()` and untrusted JavaScript DOM events.
 
-- [ ] **Step 1: Write test verifying prompt requirements**
+- [x] **Step 1: Write test verifying prompt requirements**
 
 Create `tests/test_prompt_mouse_rules.mjs`:
 ```javascript
@@ -314,12 +314,12 @@ assert.ok(!promptContent.includes("first try via Runtime.evaluate — find the e
 console.log("PASS survey_agent_prompt.txt complies with trusted mouse requirements");
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_prompt_mouse_rules.mjs"`
 Expected: FAIL (prompt currently contains the old .click() instruction and lacks globalThis.mouseClick)
 
-- [ ] **Step 3: Update `prompts/survey_agent_prompt.txt`**
+- [x] **Step 3: Update `prompts/survey_agent_prompt.txt`**
 
 1. In Step 1 (Startup snippet), inject `globalThis.mouseClick` implementation right after `cdp` definition.
 2. In Step 3 (Click an element), update text:
@@ -328,12 +328,12 @@ Expected: FAIL (prompt currently contains the old .click() instruction and lacks
    ```
 3. Update any other prompt notes that advise calling `.click()`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_prompt_mouse_rules.mjs"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -347,7 +347,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add prompts/
 **Files:**
 - Test: `tests/test_live_trusted_click.mjs`
 
-- [ ] **Step 1: Write live trusted click verification script**
+- [x] **Step 1: Write live trusted click verification script**
 
 Create `tests/test_live_trusted_click.mjs` that:
 - Connects to an active container (e.g. port 3013).
@@ -357,12 +357,12 @@ Create `tests/test_live_trusted_click.mjs` that:
 - Asserts `isTrusted === true`, `clientX > 0`, and `clientY > 0`.
 - Cleans up the test button.
 
-- [ ] **Step 2: Run verification against running container or fallback mock**
+- [x] **Step 2: Run verification against running container or fallback mock**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_live_trusted_click.mjs"`
 Expected: PASS verifying authentic `isTrusted: true` dispatch.
 
-- [ ] **Step 3: Run existing unit test suite**
+- [x] **Step 3: Run existing unit test suite**
 
 Run:
 ```bash
@@ -370,7 +370,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && for t in tests/t
 ```
 Expected: All tests PASS with exit code 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 ```bash
