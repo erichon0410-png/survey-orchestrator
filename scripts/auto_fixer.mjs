@@ -35,6 +35,25 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_CDP_WAIT_MS = 15_000;
 const DEFAULT_CDP_POLL_MS = 2_000;
 
+// Find a marker file matching a regex in the inbox or processed directories.
+function findMarker(baseDir, re) {
+  const dirs = [baseDir, path.join(baseDir, "..", "processed")];
+  for (const dir of dirs) {
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (re.test(name)) return path.join(dir, name);
+      }
+    } catch {}
+  }
+  return null;
+}
+
+// Check if an idle-today marker exists for the given port.
+function hasIdleTodayMarker(port, inboxDir) {
+  const re = new RegExp(`^${port}_idle_today_.*\\.json$`);
+  return findMarker(inboxDir, re) !== null;
+}
+
 function iso(ms) {
   return new Date(ms).toISOString();
 }
@@ -237,6 +256,13 @@ export function createAutoFixer(opts) {
         }
         clearMarker(item.port); // stale: cooldown elapsed or externally cleared
         attemptsByPort.set(item.port, []);
+      }
+
+      // Skip ports with idle-today markers (no surveys available for this platform today).
+      if (hasIdleTodayMarker(item.port, inboxDir)) {
+        logLine({ port: item.port, event: "autofix_skipped_idle_today", note: "idle-today marker present; no surveys available" });
+        out.healthy.push(item.port);
+        continue;
       }
 
       const res = await fixPort(item);

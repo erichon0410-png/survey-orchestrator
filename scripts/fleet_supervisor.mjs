@@ -97,12 +97,18 @@ const IDLE_TIMEOUT_MS = Number(process.env.AGENT_IDLE_TIMEOUT_MS) || 60 * 60 * 1
 // Authentication timeout - terminate agents stuck on sign-in for too long
 const AUTH_TIMEOUT_MS = Number(process.env.AGENT_AUTH_TIMEOUT_MS) || 30 * 60 * 1000; // 30 minutes default
 
+// Max runtime limit - wind down supervisor gracefully if run unattended
+export const FLEET_MAX_RUNTIME_MS = Number(process.env.FLEET_MAX_RUNTIME_MS) || 4 * 60 * 60 * 1000; // 4 hours default
+export const FLEET_USAGE_LIMIT_FILE = "FLEET_USAGE_LIMIT_EXHAUSTED.json";
+export const supervisorStartTime = Date.now();
+
 // --- state (in-memory, this process's life) ---
 let lastEarningsSyncDate = null; // YYYY-MM-DD string of last sync date
-const restarts = new Map(); // port -> [timestamp ms, ...]
-const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
-const targetPorts = new Set(); // target-reached marker found: never restart again
-const idleTodayPorts = new Set(); // idle-today marker found: no surveys for today
+export const restarts = new Map(); // port -> [timestamp ms, ...]
+export const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
+export const targetPorts = new Set(); // target-reached marker found: never restart again
+export const idleTodayPorts = new Set(); // idle-today marker found: no surveys for today
+export const agentStartTimes = new Map(); // port -> timestamp ms of last deploy/start
 
 // --- helpers ---
 function iso() {
@@ -353,114 +359,235 @@ function checkAuthTimeouts(psLines) {
   }
 }
 
-// Helper: get agent start time from status log
-function getAgentStartTime(port) {
-  const statusLog = path.join(LOGS_DIR, `agent_${port}_status.jsonl`);
+// Check if any driver tripped the fleet-wide Codex API quota / usage limit circuit breaker
+export function checkFleetUsageLimit(inboxDir = INBOX) {
+  const markerPath = path.join(inboxDir, FLEET_USAGE_LIMIT_FILE);
+  try {
+    if (fs.existsSync(markerPath)) {
+      let detail = "";
+      try {
+        const data = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+        detail = data.detail || data.reason || "";
+      } catch {}
+      return { exhausted: true, path: markerPath, detail };
+    }
+  } catch {}
+  return { exhausted: false, path: markerPath, detail: "" };
+}
+
+// Helper: get timestamp of last verified earning event (survey_done, target_reached, payout > 0)
+export function getLastEarningsTime(port, { logsDir = LOGS_DIR, inboxDir = INBOX, processedDir = PROCESSED } = {}) {
+  const statusLog = path.join(logsDir, `agent_${port}_status.jsonl`);
+  let lastEarningsMs = 0;
   try {
     if (fs.existsSync(statusLog)) {
       const content = fs.readFileSync(statusLog, "utf8");
       const lines = content.split("\n");
-      
-      for (const line of lines) {
-        const trimmed = line.trim();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const trimmed = lines[i].trim();
         if (!trimmed) continue;
-        
         try {
           const entry = JSON.parse(trimmed);
-          if (entry.event === "start") {
-            return new Date(entry.ts).getTime();
+          const isEarning =
+            entry.event === "survey_done" ||
+            entry.event === "target_reached" ||
+            entry.event === "balance_increase" ||
+            (typeof entry.payout_usd === "number" && entry.payout_usd > 0) ||
+            (typeof entry.earned === "number" && entry.earned > 0) ||
+            (typeof entry.payout === "number" && entry.payout > 0);
+          if (isEarning && entry.ts) {
+            const ms = new Date(entry.ts).getTime();
+            if (!Number.isNaN(ms) && ms > 0) {
+              lastEarningsMs = ms;
+              break;
+            }
           }
-        } catch (e) {
-          // Ignore malformed lines
+        } catch {}
+      }
+    }
+  } catch {}
+
+  // Also check for recent target_reached markers in inbox/processed
+  try {
+    const markerRe = new RegExp(`^${port}_target_reached_.*\\.json$`);
+    for (const dir of [inboxDir, processedDir]) {
+      if (!dir || !fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir)) {
+        if (markerRe.test(file)) {
+          try {
+            const stat = fs.statSync(path.join(dir, file));
+            if (stat.mtimeMs > lastEarningsMs) {
+              lastEarningsMs = stat.mtimeMs;
+            }
+          } catch {}
         }
       }
     }
-  } catch (e) {
-    // Ignore errors
+  } catch {}
+
+  return lastEarningsMs;
+}
+
+// Helper: get agent start time from memory or status log
+export function getAgentStartTime(port, { logsDir = LOGS_DIR } = {}) {
+  if (agentStartTimes.has(port)) {
+    return agentStartTimes.get(port);
   }
+  const statusLog = path.join(logsDir, `agent_${port}_status.jsonl`);
+  try {
+    if (fs.existsSync(statusLog)) {
+      const content = fs.readFileSync(statusLog, "utf8");
+      const lines = content.split("\n");
+      // Search backwards for the most recent start event or turn 1
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const trimmed = lines[i].trim();
+        if (!trimmed) continue;
+        try {
+          const entry = JSON.parse(trimmed);
+          if (entry.event === "start" || entry.event === "supervisor_resume" || entry.turn === 1) {
+            const ms = new Date(entry.ts).getTime();
+            if (!Number.isNaN(ms) && ms > 0) return ms;
+          }
+        } catch {}
+      }
+      // If no explicit start event, look for earliest valid entry timestamp
+      for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (!trimmed) continue;
+        try {
+          const entry = JSON.parse(trimmed);
+          if (entry.ts) {
+            const ms = new Date(entry.ts).getTime();
+            if (!Number.isNaN(ms) && ms > 0) return ms;
+          }
+        } catch {}
+      }
+      const stat = fs.statSync(statusLog);
+      return stat.ctimeMs || stat.mtimeMs;
+    }
+  } catch {}
   return 0;
 }
 
-// --- idle timeout: terminate agents that haven't earned in 1 hour ---
-function checkIdleTimeouts(psLines) {
-  const now = Date.now();
-  
+// Check if all ports in FLEET have reached a terminal condition (target reached, idle today, or paused with 0 alive)
+export function isFleetTerminal({ targetPorts: t = targetPorts, idleTodayPorts: i = idleTodayPorts, pausedPorts: p = pausedPorts, alivePorts = [] } = {}) {
+  const allCompletedOrIdle = FLEET.every((item) => t.has(item.port) || i.has(item.port));
+  if (allCompletedOrIdle) return true;
+
+  const allTerminal = FLEET.every((item) => t.has(item.port) || i.has(item.port) || p.has(item.port));
+  return allTerminal && alivePorts.length === 0;
+}
+
+// --- idle timeout: terminate agents that haven't earned in 1 hour & write idle-today marker ---
+export function checkIdleTimeouts(psLines, options = {}) {
+  const now = options.now || Date.now();
+  const logsDir = options.logsDir || LOGS_DIR;
+  const inboxDir = options.inboxDir || INBOX;
+  const processedDir = options.processedDir || PROCESSED;
+  const idleTimeoutMs = options.idleTimeoutMs || IDLE_TIMEOUT_MS;
+  const terminated = [];
+
   for (const item of FLEET) {
     const port = item.port;
-    
-    // Skip ports that are paused, completed, or not running
+
+    // Skip ports that are paused, completed, already marked idle today, or not running
     if (pausedPorts.has(port)) continue;
     if (targetPorts.has(port)) continue;
+    if (idleTodayPorts.has(port)) continue;
     if (!isPortAlive(port, psLines)) continue;
-    
-    // Check last activity: look for recent target_reached markers or status log entries
-    const statusLog = path.join(LOGS_DIR, `agent_${port}_status.jsonl`);
-    let lastActivityMs = 0;
-    
-    try {
-      if (fs.existsSync(statusLog)) {
-        const stat = fs.statSync(statusLog);
-        lastActivityMs = stat.mtimeMs;
-      }
-    } catch (e) {
-      // Ignore errors checking log file
+
+    let lastEarningsMs = getLastEarningsTime(port, { logsDir, inboxDir, processedDir });
+
+    if (lastEarningsMs === 0) {
+      // No earnings recorded yet — measure idle time against when agent started
+      const startedMs = getAgentStartTime(port, { logsDir });
+      lastEarningsMs = startedMs > 0 ? startedMs : now;
     }
-    
-    // Also check for recent target_reached markers in inbox/processed
-    try {
-      const markerRe = new RegExp(`^${port}_target_reached_.*\\.json$`);
-      for (const dir of [INBOX, PROCESSED]) {
-        if (!fs.existsSync(dir)) continue;
-        for (const file of fs.readdirSync(dir)) {
-          if (markerRe.test(file)) {
-            try {
-              const stat = fs.statSync(path.join(dir, file));
-              if (stat.mtimeMs > lastActivityMs) {
-                lastActivityMs = stat.mtimeMs;
-              }
-            } catch (e) {
-              // Ignore
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore errors scanning for markers
-    }
-    
-    if (lastActivityMs === 0) {
-      // No activity recorded at all — agent just started or log missing
-      continue;
-    }
-    
-    const idleMs = now - lastActivityMs;
-    if (idleMs > IDLE_TIMEOUT_MS) {
+
+    const idleMs = now - lastEarningsMs;
+    if (idleMs > idleTimeoutMs) {
       const idleMinutes = Math.round(idleMs / 60000);
       appendSupervisorLog({
         ts: iso(),
         port,
         action: "idle_timeout_terminate",
         idle_minutes: idleMinutes,
-        note: `Agent terminated: no earnings activity for ${idleMinutes} minutes (threshold: ${Math.round(IDLE_TIMEOUT_MS / 60000)} min)`,
+        note: `Agent terminated: no earnings activity for ${idleMinutes} minutes (threshold: ${Math.round(idleTimeoutMs / 60000)} min); marked idle today`,
       });
-      
-      // Kill the agent process
+
+      // 1. Write the idle_today marker so supervisor never restarts this port today
+      const today = new Date(now);
+      const yyyymmdd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+      const markerPath = path.join(inboxDir, `${port}_idle_today_${yyyymmdd}.json`);
+      try {
+        fs.writeFileSync(markerPath, JSON.stringify({
+          port,
+          ts: today.toISOString(),
+          type: "idle_today",
+          reason: `idle_timeout: no earnings for ${idleMinutes} minutes`,
+          date: yyyymmdd,
+        }, null, 2) + "\n", "utf-8");
+        appendSupervisorLog({ ts: iso(), port, action: "wrote_idle_today_marker", marker: markerPath });
+      } catch (e) {
+        appendSupervisorLog({ ts: iso(), port, action: "write_idle_today_marker_failed", error: String(e) });
+      }
+
+      // 2. Add to idleTodayPorts in-memory set to prevent immediate redeployment
+      idleTodayPorts.add(port);
+
+      // 3. Kill the agent process
       try {
         execSync(`pkill -f "${driverKillPattern(port)}" || true`);
-        publishSupervisorEvent("idle_timeout_terminate", `port ${port} terminated: no earnings for ${idleMinutes}m`, { port, idleMinutes });
+        publishSupervisorEvent("idle_timeout_terminate", `port ${port} terminated: no earnings for ${idleMinutes}m; marked idle today`, { port, idleMinutes });
       } catch (e) {
         appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
       }
+
+      terminated.push(port);
     }
   }
+  return terminated;
 }
 
 // --- one tick: check every FLEET port in ascending order ---
-async function tick() {
+export async function tick() {
   const alivePorts = [];
   const restartedPorts = [];
   publishSupervisorEvent("tick_started", "supervisor tick started; checking fleet");
   try {
+    // 0a. Check API quota / usage limit circuit breaker
+    const limitCheck = checkFleetUsageLimit();
+    if (limitCheck.exhausted) {
+      appendSupervisorLog({
+        ts: iso(),
+        event: "fleet_usage_limit_detected",
+        note: `CRITICAL: FLEET_USAGE_LIMIT_EXHAUSTED marker detected (${limitCheck.detail}). Halting entire fleet and exiting supervisor cleanly.`,
+      });
+      publishSupervisorEvent("fleet_usage_limit", "Fleet stopped: Codex API usage limit or quota reached", { detail: limitCheck.detail });
+      for (const item of FLEET) {
+        try { execSync(`pkill -f "${driverKillPattern(item.port)}" || true`); } catch {}
+      }
+      try { syncEarnings({ dailyHeartbeat: true }); } catch {}
+      await shutdown();
+      return;
+    }
+
+    // 0b. Max runtime guard: wind down supervisor gracefully if run unattended
+    if (Date.now() - supervisorStartTime >= FLEET_MAX_RUNTIME_MS) {
+      appendSupervisorLog({
+        ts: iso(),
+        event: "fleet_max_runtime_exceeded",
+        note: `Supervisor reached max runtime of ${Math.round(FLEET_MAX_RUNTIME_MS / 60000)} minutes. Halting entire fleet and exiting cleanly.`,
+      });
+      publishSupervisorEvent("fleet_max_runtime", `Fleet reached max runtime (${Math.round(FLEET_MAX_RUNTIME_MS / 3600000)}h); shutting down`);
+      for (const item of FLEET) {
+        try { execSync(`pkill -f "${driverKillPattern(item.port)}" || true`); } catch {}
+      }
+      try { syncEarnings({ dailyHeartbeat: true }); } catch {}
+      await shutdown();
+      return;
+    }
+
     // --- Daily earnings sync & graph refresh at 7:00 AM ---
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -629,6 +756,7 @@ async function tick() {
         continue;
       }
       if (res && res.ok === true) {
+        agentStartTimes.set(port, Date.now());
         appendSupervisorLog({ ts: iso(), port, action: "restarted", pid: res.pid });
         publishSupervisorEvent("agent_redeploy", `port ${port} redeployed (PID ${res.pid})`, { port, pid: res.pid });
         restartedPorts.push(port);
@@ -641,6 +769,23 @@ async function tick() {
           error: String(err === undefined ? "deployAgent returned no result" : err),
         });
       }
+    }
+
+    // (d) Check if all ports have reached a terminal state (target reached, idle today, or paused with 0 alive)
+    if (isFleetTerminal({ targetPorts, idleTodayPorts, pausedPorts, alivePorts })) {
+      appendSupervisorLog({
+        ts: iso(),
+        event: "fleet_all_terminal",
+        note: `All ${FLEET.length} ports terminal (${targetPorts.size} target reached, ${idleTodayPorts.size} idle today, ${pausedPorts.size} paused). Exiting supervisor cleanly.`,
+      });
+      publishSupervisorEvent("fleet_completed", "All fleet agents reached terminal state for today; supervisor shutting down cleanly");
+      try {
+        syncEarnings({ dailyHeartbeat: true });
+      } catch (e) {
+        appendSupervisorLog({ ts: iso(), event: "final_sync_earnings_failed", error: String(e) });
+      }
+      await shutdown();
+      return;
     }
   } catch (e) {
     // One bad tick never kills the loop.
@@ -657,7 +802,7 @@ async function tick() {
 // --- startup ---
 fs.mkdirSync(LOGS_DIR, { recursive: true });
 let stopping = false;
-async function shutdown() {
+export async function shutdown() {
   if (stopping) return;
   stopping = true;
   try {

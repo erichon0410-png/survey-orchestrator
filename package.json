@@ -2,7 +2,9 @@
   "scripts": {
     "setup:hermes": "node scripts/setup_hermes_fleet.mjs",
     "report:hermes": "node scripts/hermes_fleet_reporter.mjs --once",
-    "test:hermes": "node tests/test_hermes_digest.mjs && node tests/test_hermes_reporter.mjs && node tests/test_survey_fleet_skill.mjs && node tests/test_setup_hermes_fleet.mjs && node tests/test_live_hermes_dispatch.mjs"
+    "test:hermes": "node tests/test_hermes_digest.mjs && node tests/test_hermes_reporter.mjs && node tests/test_survey_fleet_skill.mjs && node tests/test_setup_hermes_fleet.mjs && node tests/test_live_hermes_dispatch.mjs",
+    "fleet:stop": "node scripts/stop_fleet.mjs",
+    "fleet:status": "node scripts/fleet_status.mjs"
   },
   "dependencies": {
     "@playwright/test": "^1.63.0",

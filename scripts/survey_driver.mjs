@@ -37,9 +37,11 @@
 import fs from "node:fs";
 
 // Exit code constants
-const EXIT_OK = 0;
-const EXIT_TECH_ISSUE = 3;
-const EXIT_IDLE_NO_SURVEYS = 4;
+export const EXIT_OK = 0;
+export const EXIT_TECH_ISSUE = 3;
+export const EXIT_IDLE_NO_SURVEYS = 4;
+export const EXIT_USAGE_LIMIT = 5;
+export const FLEET_USAGE_LIMIT_FILE = "FLEET_USAGE_LIMIT_EXHAUSTED.json";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -48,13 +50,14 @@ import { normalizeCodexLine } from "./fleet_events.mjs";
 
 // ---------- arg / env parsing ----------
 function parseArgs(argv) {
-  const out = { port: null, marker: "", promptFile: null, maxNudges: null, model: null, effort: null };
+  const out = { port: null, marker: "", promptFile: null, maxNudges: null, maxTurns: null, model: null, effort: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") out.port = Number(argv[++i]);
     else if (a === "--marker") out.marker = String(argv[++i] ?? "");
     else if (a === "--prompt-file") out.promptFile = String(argv[++i]);
     else if (a === "--max-nudges") out.maxNudges = Number(argv[++i]);
+    else if (a === "--max-turns") out.maxTurns = Number(argv[++i]);
     else if (a === "--model") out.model = String(argv[++i]);
     else if (a === "--effort") out.effort = String(argv[++i]);
   }
@@ -66,6 +69,9 @@ const PORT = Number.isFinite(args.port) ? args.port : null;
 const MAX_NUDGES = Number.isFinite(args.maxNudges) && args.maxNudges > 0
   ? Math.floor(args.maxNudges)
   : (Number.isFinite(Number(process.env.SURVEY_MAX_NUDGES)) ? Number(process.env.SURVEY_MAX_NUDGES) : 8);
+export const MAX_TURNS = Number.isFinite(args.maxTurns) && args.maxTurns > 0
+  ? Math.floor(args.maxTurns)
+  : (Number.isFinite(Number(process.env.SURVEY_MAX_TURNS)) ? Number(process.env.SURVEY_MAX_TURNS) : 10);
 const MODEL = args.model || process.env.SURVEY_MODEL || "gpt-5.6-luna";
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "low";
 // Hard per-turn hang guard: a single codex turn may legitimately run long (the model polls the
@@ -493,8 +499,49 @@ function writeTechIssue(reason, detail) {
   appendStatus({ event: "tech_issue_reported", reason, note: String(detail).slice(0, 300), ref: `reports/inbox/${refName}` });
 }
 
+export function detectUsageLimit(text) {
+  if (!text || typeof text !== "string") return null;
+  const lower = text.toLowerCase();
+  if (
+    lower.includes("hit your usage limit") ||
+    lower.includes("you've hit your usage limit") ||
+    lower.includes("insufficient_quota") ||
+    lower.includes("403 forbidden") ||
+    lower.includes("status 403") ||
+    lower.includes("rate_limit_exceeded") ||
+    (lower.includes("usage limit") && (lower.includes("purchase more credits") || lower.includes("try again at")))
+  ) {
+    const m = text.match(/try again at ([^.]+)/i);
+    return {
+      hit: true,
+      retryAt: m ? m[1].trim() : null,
+      message: text.slice(0, 300),
+    };
+  }
+  return null;
+}
+
+export function writeFleetUsageLimitMarker({ port, reason = "usage_limit", detail = "" }) {
+  try {
+    fs.mkdirSync(INBOX, { recursive: true });
+    const markerFile = path.join(INBOX, FLEET_USAGE_LIMIT_FILE);
+    const body = {
+      ts: ts(),
+      port,
+      type: "usage_limit_exhausted",
+      reason,
+      detail: String(detail).slice(0, 500),
+      note: "CRITICAL: Codex API usage limit or 403/429 quota hit; entire fleet should stop immediately to preserve quota",
+    };
+    fs.writeFileSync(markerFile, JSON.stringify(body, null, 2) + "\n", "utf-8");
+    log("warn", `wrote fleet usage limit marker to ${markerFile}`);
+  } catch (e) {
+    log("error", "failed to write fleet usage limit marker", { err: String(e) });
+  }
+}
+
 // ---------- shared mutable state (module scope; read by signal handlers + main loop) ----------
-const state = { child: null, nudgesUsed: 0, turn: 0, stopping: false, baselineBalance: null };
+const state = { child: null, nudgesUsed: 0, turn: 0, consecutiveFailures: 0, stopping: false, baselineBalance: null };
 
 // Daily target in USD (from prompt template: $5.00 completion quota per run)
 const DAILY_TARGET_USD = 5.00;
@@ -696,10 +743,31 @@ async function main() {
   let sessionId = null;
 
   while (true) {
+    // 0. Global circuit breaker: if another worker flagged usage limits, exit immediately to save quota
+    if (fs.existsSync(path.join(INBOX, FLEET_USAGE_LIMIT_FILE))) {
+      log("warn", "FLEET_USAGE_LIMIT_FILE detected -> clean exit to preserve quota");
+      finishClean(EXIT_USAGE_LIMIT);
+      return;
+    }
+
+    // 1. Hard Turn Limit check: prevent runaway loops
+    if (state.turn >= MAX_TURNS) {
+      log("warn", `hard turn limit reached (${state.turn}/${MAX_TURNS}) -> fail-closed`);
+      const idleIssue = findIdleConditionTechIssue();
+      if (idleIssue) {
+        writeIdleTodayMarker();
+        finishClean(EXIT_IDLE_NO_SURVEYS);
+      } else {
+        writeTechIssue("max_turns_exhausted", `exceeded hard turn limit (${MAX_TURNS} turns) without reaching target`);
+        finishClean(EXIT_TECH_ISSUE);
+      }
+      return;
+    }
+
     state.turn++;
     const turn = state.turn;
 
-    // Terminal check before each spawn: if the target marker already exists, stop cleanly.
+    // 2. Terminal check before each spawn: if the target marker already exists, stop cleanly.
     if (targetReached()) {
       log("info", "target_reached marker present -> clean exit");
       if (pub) {
@@ -710,28 +778,19 @@ async function main() {
           message: `port ${PORT} target reached -> clean exit`,
         });
       }
-      finishClean(0);
+      finishClean(EXIT_OK);
       return;
     }
 
     let argsArr;
     if (!sessionId) {
-      argsArr = ["exec", ...codexBaseFlags, promptText]; // turn 1: fresh exec
+      argsArr = ["exec", ...codexBaseFlags, promptText]; // initial or fresh turn
     } else {
       // Bounded nudge budget: fail closed once we've spent all nudges and still have no target.
       if (state.nudgesUsed >= MAX_NUDGES) {
         log("warn", "nudge budget exhausted without target -> fail-closed");
-        
-        // Check if any recent tech issue indicates a permanent idle state (no surveys available)
-        // vs. a transient tech issue that might resolve on retry.
         const idleIssue = findIdleConditionTechIssue();
-        log("debug", "checking for idle condition", { 
-          hasIdleIssue: !!idleIssue, 
-          note: idleIssue?.note || "none" 
-        });
-
         if (idleIssue) {
-          // Write an idle_today marker so the supervisor doesn't restart this port today.
           writeIdleTodayMarker();
           log("info", "writing idle_today marker — no surveys available for this platform today");
           finishClean(EXIT_IDLE_NO_SURVEYS);
@@ -745,11 +804,11 @@ async function main() {
               message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
             });
           }
-          finishClean(3);
+          finishClean(EXIT_TECH_ISSUE);
         }
         return;
       }
-      state.nudgesUsed++; // this resume is nudge #state.nudgesUsed
+      state.nudgesUsed++;
       if (pub) {
         pub.publish({
           source: "driver",
@@ -758,19 +817,18 @@ async function main() {
           message: `nudge ${state.nudgesUsed}/${MAX_NUDGES} sent to port ${PORT}`,
         });
       }
-      // Order MUST be `resume [OPTIONS] [SESSION_ID] [PROMPT]` (see `codex exec resume --help`):
       const nudgePrompt = buildNudgePrompt(PORT);
       argsArr = ["exec", "resume", ...codexBaseFlags, sessionId, nudgePrompt];
     }
 
-    log("info", `turn ${turn} starting`, { kind: sessionId ? "resume" : "initial", nudgesUsed: state.nudgesUsed, maxNudges: MAX_NUDGES });
+    log("info", `turn ${turn} starting`, { kind: sessionId ? "resume" : "fresh", nudgesUsed: state.nudgesUsed, maxNudges: MAX_NUDGES, maxTurns: MAX_TURNS });
     if (pub) {
       pub.publish({
         source: "driver",
         port: PORT,
         event: "turn_started",
-        message: `turn ${turn} starting (${sessionId ? "resume" : "initial"})`,
-        detail: { turn, kind: sessionId ? "resume" : "initial" },
+        message: `turn ${turn} starting (${sessionId ? "resume" : "fresh"})`,
+        detail: { turn, kind: sessionId ? "resume" : "fresh" },
       });
     }
 
@@ -787,47 +845,74 @@ async function main() {
       });
     }
 
-    if (turn === 1) {
-      sessionId = res.threadId || null;
-      if (!sessionId) {
-        log("warn", "no thread_id captured from initial turn");
+    // 3. Inspect outputs for OpenAI / Codex usage limits or 403 Forbidden
+    let usageLimitInfo = null;
+    if (fs.existsSync(AGENT_LOG)) {
+      try {
+        const out = fs.readFileSync(AGENT_LOG, "utf-8");
+        usageLimitInfo = detectUsageLimit(out);
+      } catch {}
+    }
+    if (!usageLimitInfo && fs.existsSync(AGENT_STDERR_LOG)) {
+      try {
+        const errOut = fs.readFileSync(AGENT_STDERR_LOG, "utf-8");
+        usageLimitInfo = detectUsageLimit(errOut);
+      } catch {}
+    }
 
-        // Detect idle condition from the CURRENT turn's codex output (not historical log).
-        // On turn 1, no tech issue exists in the status log yet — look for idle keywords
-        // directly in the agent log that just completed.
-        let hasIdleKeywords = false;
-        if (fs.existsSync(AGENT_LOG)) {
-          try {
-            const lastOutput = fs.readFileSync(AGENT_LOG, "utf-8").toLowerCase();
-            hasIdleKeywords = lastOutput.includes("no surveys") ||
-              lastOutput.includes("empty questionnaire") ||
-              lastOutput.includes("no questionnaires available");
-          } catch (e) {
-            log("warn", "could not read agent log for idle detection", { err: String(e) });
-          }
-        }
+    if (usageLimitInfo) {
+      log("error", "Codex usage limit reached! Triggering fleet-wide circuit breaker.", usageLimitInfo);
+      writeFleetUsageLimitMarker({
+        port: PORT,
+        reason: "codex_usage_limit",
+        detail: usageLimitInfo.message,
+      });
+      writeTechIssue("usage_limit_reached", usageLimitInfo.message);
+      finishClean(EXIT_USAGE_LIMIT);
+      return;
+    }
 
-        if (hasIdleKeywords) {
-          writeIdleTodayMarker();
-          log("info", "writing idle_today marker — no surveys available for this platform today");
-          finishClean(EXIT_IDLE_NO_SURVEYS);
-        } else {
-          writeTechIssue("no_thread_id", `codex exec turn 1 ended (code=${res.code}) without a thread.started event; cannot resume`);
-          if (pub) {
-            pub.publish({
-              source: "driver",
-              port: PORT,
-              event: "tech_issue",
-              message: `no thread_id captured from initial turn (code ${res.code})`,
-            });
-          }
-          finishClean(3);
-        }
+    // 4. Consecutive failure guard
+    if (res.code !== 0 && res.signal !== "SIGTERM" && res.signal !== "SIGINT") {
+      state.consecutiveFailures++;
+      log("warn", `turn ${turn} exited with code ${res.code} (consecutive failures: ${state.consecutiveFailures})`);
+      if (state.consecutiveFailures >= 3) {
+        log("error", `3 consecutive turn failures on port ${PORT} -> failing closed to preserve quota`);
+        writeTechIssue("consecutive_turn_failures", `exited with code ${res.code} three times in a row`);
+        finishClean(EXIT_TECH_ISSUE);
         return;
+      }
+    } else {
+      state.consecutiveFailures = 0;
+    }
+
+    // 5. Capture threadId if available
+    if (!sessionId && res.threadId) {
+      sessionId = res.threadId;
+    }
+
+    // 6. Check for idle condition in output
+    let hasIdleKeywords = false;
+    if (fs.existsSync(AGENT_LOG)) {
+      try {
+        const lastOutput = fs.readFileSync(AGENT_LOG, "utf-8").toLowerCase();
+        hasIdleKeywords = lastOutput.includes("no surveys") ||
+          lastOutput.includes("empty questionnaire") ||
+          lastOutput.includes("no questionnaires available") ||
+          lastOutput.includes("no available surveys");
+      } catch (e) {
+        log("warn", "could not read agent log for idle detection", { err: String(e) });
       }
     }
 
-    // Check if the turn produced a hard refusal.
+    if (hasIdleKeywords && !targetReached()) {
+      writeIdleTodayMarker();
+      log("info", "writing idle_today marker — no surveys available for this platform today");
+      finishClean(EXIT_IDLE_NO_SURVEYS);
+      return;
+    }
+
+    // 7. Check if the turn produced a hard refusal.
     // If so, resuming this session is futile because the model will repeat its refusal on every nudge.
     // Discard sessionId so the next attempt starts fresh with a clean context.
     if (sessionId && fs.existsSync(AGENT_LOG)) {
@@ -843,9 +928,22 @@ async function main() {
       }
     }
 
-    // Not terminal -> the next loop iteration decides resume vs budget-exhausted.
-    if (!targetReached()) {
-      appendStatus({ event: "progress", note: `driver: turn ${turn} ended without target${sessionId ? `; nudges used ${state.nudgesUsed}/${MAX_NUDGES}` : ""}` });
+    // 8. Terminal check: stop if target was reached
+    if (targetReached()) {
+      finishClean(EXIT_OK);
+      return;
+    }
+
+    appendStatus({ event: "progress", note: `driver: turn ${turn} ended without target${sessionId ? `; nudges used ${state.nudgesUsed}/${MAX_NUDGES}` : ""}` });
+
+    // 9. MANDATORY RATE-LIMITING PACING DELAY
+    // Never spin at 0ms. Wait at least 15s between normal turns, or 30-60s on failure.
+    if (!state.stopping) {
+      const delayMs = state.consecutiveFailures > 0
+        ? Math.min(60000, 30000 * state.consecutiveFailures)
+        : 15000;
+      log("info", `pacing inter-turn delay: waiting ${Math.round(delayMs / 1000)}s before turn ${turn + 1}...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 }
