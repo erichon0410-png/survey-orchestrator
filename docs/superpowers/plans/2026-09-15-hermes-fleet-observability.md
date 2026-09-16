@@ -34,7 +34,7 @@
   - `options`: `{ windowMinutes?: number, now?: Date }`
   - Returns: `{ perPort: Map<number, { channel: string, markdown: string, hasActivity: boolean }>, rollup: { channel: string, markdown: string } }`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `tests/test_hermes_digest.mjs`:
 ```javascript
@@ -123,12 +123,12 @@ check("generates per-agent markdown digest and fleet rollup", () => {
 console.log(`${passed} checks completed.`);
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_hermes_digest.mjs"`
 Expected: FAIL with "Cannot find module '../scripts/hermes_digest.mjs'"
 
-- [ ] **Step 3: Implement `scripts/hermes_digest.mjs`**
+- [x] **Step 3: Implement `scripts/hermes_digest.mjs`**
 
 Create `scripts/hermes_digest.mjs`:
 ```javascript
@@ -262,12 +262,12 @@ ${[3013, 3014, 3015, 3016, 3017]
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_hermes_digest.mjs"`
 Expected: PASS (2 checks completed, exit 0)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -290,7 +290,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add scripts/
   - `--dry-run`: Do not call `hermes send`, output to stdout
   - `--port <port>`: Filter to a specific container port
 
-- [ ] **Step 1: Write the unit test for the reporter runner**
+- [x] **Step 1: Write the unit test for the reporter runner**
 
 Create `tests/test_hermes_reporter.mjs`:
 ```javascript
@@ -306,12 +306,12 @@ assert.ok(run.stdout.includes("DRY-RUN: discord:#agent-3013"), "Dry run should o
 console.log("PASS hermes_fleet_reporter.mjs dry-run and argument parsing");
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_hermes_reporter.mjs"`
 Expected: FAIL with "Cannot find module ... scripts/hermes_fleet_reporter.mjs"
 
-- [ ] **Step 3: Implement `scripts/hermes_fleet_reporter.mjs`**
+- [x] **Step 3: Implement `scripts/hermes_fleet_reporter.mjs`**
 
 Create `scripts/hermes_fleet_reporter.mjs`:
 ```javascript
@@ -409,12 +409,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_hermes_reporter.mjs"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -434,7 +434,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add scripts/
 - CLI Helper: `node skills/survey-fleet-agent/scripts/agent_control.mjs <status|screenshot|balance|nudge> <port>`
 - Returns: JSON result with live state, screenshot path, or action confirmation.
 
-- [ ] **Step 1: Write the unit test for the skill helper**
+- [x] **Step 1: Write the unit test for the skill helper**
 
 Create `tests/test_survey_fleet_skill.mjs`:
 ```javascript
@@ -460,12 +460,12 @@ assert.ok(statusJson.platform, "Should return platform name");
 console.log("PASS survey-fleet-agent skill and control helper");
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_survey_fleet_skill.mjs"`
 Expected: FAIL (files do not exist yet)
 
-- [ ] **Step 3: Implement `skills/survey-fleet-agent/`**
+- [x] **Step 3: Implement `skills/survey-fleet-agent/`**
 
 Create `skills/survey-fleet-agent/scripts/agent_control.mjs`:
 ```javascript
@@ -597,12 +597,12 @@ When the user asks:
    Confirm that the container agent turn has been nudged.
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_survey_fleet_skill.mjs"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -618,7 +618,7 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add skills/ 
 - Modify: `package.json`
 - Test: `tests/test_setup_hermes_fleet.mjs`
 
-- [ ] **Step 1: Write test for setup script**
+- [x] **Step 1: Write test for setup script**
 
 Create `tests/test_setup_hermes_fleet.mjs`:
 ```javascript
@@ -634,12 +634,12 @@ assert.ok(res.stdout.includes("Discord channels"), "Should check Discord channel
 console.log("PASS setup_hermes_fleet.mjs validation checks");
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_setup_hermes_fleet.mjs"`
 Expected: FAIL
 
-- [ ] **Step 3: Implement `scripts/setup_hermes_fleet.mjs` and update `package.json`**
+- [x] **Step 3: Implement `scripts/setup_hermes_fleet.mjs` and update `package.json`**
 
 Create `scripts/setup_hermes_fleet.mjs`:
 ```javascript
@@ -723,12 +723,12 @@ console.log("\nSetup complete! The survey fleet is connected to Hermes and Disco
 
 Modify `package.json` to add `"setup:hermes": "node scripts/setup_hermes_fleet.mjs"`, `"report:hermes": "node scripts/hermes_fleet_reporter.mjs --once"`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_setup_hermes_fleet.mjs"`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```bash
@@ -742,22 +742,22 @@ wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && git add scripts/
 **Files:**
 - Test: `tests/test_live_hermes_dispatch.mjs`
 
-- [ ] **Step 1: Run turnkey setup to link skill and cron**
+- [x] **Step 1: Run turnkey setup to link skill and cron**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node scripts/setup_hermes_fleet.mjs"`
 Expected: Clean installation of skill and cron job.
 
-- [ ] **Step 2: Run live dry-run reporter dispatch**
+- [x] **Step 2: Run live dry-run reporter dispatch**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node scripts/hermes_fleet_reporter.mjs --once --dry-run"`
 Expected: Output showing generated Markdown for all 5 channels and `#survey-reports`.
 
-- [ ] **Step 3: Run full unit test suite**
+- [x] **Step 3: Run full unit test suite**
 
 Run: `wsl -e bash -c "cd /home/erich/workspace/survey-orchestrator && node tests/test_hermes_digest.mjs && node tests/test_hermes_reporter.mjs && node tests/test_survey_fleet_skill.mjs && node tests/test_setup_hermes_fleet.mjs"`
 Expected: All tests pass with exit code 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 ```bash
