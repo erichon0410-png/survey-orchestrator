@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "setup:hermes": "node scripts/setup_hermes_fleet.mjs",
+    "report:hermes": "node scripts/hermes_fleet_reporter.mjs --once"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.63.0",
+    "playwright": "^1.63.0"
+  }
+}
