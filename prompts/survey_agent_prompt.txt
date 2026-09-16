@@ -102,13 +102,52 @@ How to drive it:
    // Hello probe to confirm control before acting:
    const hello = await cdp("Runtime.evaluate", { expression: "document.title", returnByValue: true });
    nodeRepl.write(JSON.stringify({ ok: true, title: hello.result.value }));
+
+   // Trusted physical mouse emulation helper (isTrusted: true, realistic trajectory & jitter)
+   let lastMousePos = { x: 100, y: 100 };
+   globalThis.mouseClick = async (target, opts = {}) => {
+     let x, y;
+     if (typeof target === "string") {
+       const res = await cdp("Runtime.evaluate", {
+         expression: `(() => {
+           const el = document.querySelector(${JSON.stringify(target)});
+           if (!el) return null;
+           el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+           const r = el.getBoundingClientRect();
+           return { x: r.left, y: r.top, w: r.width, h: r.height, tag: el.tagName, text: el.innerText ? el.innerText.slice(0, 50) : "" };
+         })()`,
+         returnByValue: true
+       });
+       const info = res?.result?.value;
+       if (!info) throw new Error(`Element not found for selector: ${target}`);
+       if (info.w === 0 && info.h === 0) throw new Error(`Element has 0 dimensions: ${target}`);
+       const jitterX = (Math.random() - 0.5) * (info.w * 0.4);
+       const jitterY = (Math.random() - 0.5) * (info.h * 0.4);
+       x = Math.round(info.x + info.w / 2 + jitterX);
+       y = Math.round(info.y + info.h / 2 + jitterY);
+     } else if (target && typeof target.x === "number" && typeof target.y === "number") {
+       x = Math.round(target.x);
+       y = Math.round(target.y);
+     } else {
+       throw new Error("Invalid target: must be selector string or {x, y} coordinates");
+     }
+     const midX = Math.round((lastMousePos.x + x) / 2 + (Math.random() * 6 - 3));
+     const midY = Math.round((lastMousePos.y + y) / 2 + (Math.random() * 6 - 3));
+     await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: midX, y: midY });
+     await new Promise(r => setTimeout(r, 15 + Math.floor(Math.random() * 15)));
+     await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+     await new Promise(r => setTimeout(r, 20 + Math.floor(Math.random() * 20)));
+     await cdp("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+     await new Promise(r => setTimeout(r, opts.holdMs ?? (60 + Math.floor(Math.random() * 50))));
+     await cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+     lastMousePos = { x, y };
+     return { ok: true, x, y };
+   };
    ```
    Keep this one connection open for the whole session.
 
 2. Read state: send {method:"Runtime.evaluate", params:{expression, returnByValue:true, awaitPromise:true}}. Always read the DOM before acting — never guess what is on screen. Example: expression `document.body.innerText.slice(0,2000)` or targeted selectors.
-3. Click an element: first try via Runtime.evaluate — find the element by selector/text and call `.click()` on it. If nothing changes after ~2s, retry with a trusted mouse event at its live rect:
-   `const r = el.getBoundingClientRect(); const x = r.x + r.width/2, y = r.y + r.height/2;`
-   then Input.dispatchMouseEvent {type:"mouseMoved",x,y} → {type:"mousePressed",x,y,button:"left",clickCount:1} → {type:"mouseReleased",x,y,button:"left",clickCount:1}.
+3. Click an element: ALWAYS use `await mouseClick(selector)` (e.g. `await mouseClick('.survey-card')`) or `await mouseClick({ x, y })`. NEVER call `element.click()` or synthetic JS `.dispatchEvent(new MouseEvent('click'))`. Modern survey platforms inspect `event.isTrusted: true` and pointer telemetry. `mouseClick` automatically scrolls the target into view, emits realistic hover trajectories with jitter, and fires genuine browser-level `Input.dispatchMouseEvent` events with human hold timing.
 4. Type into a field (React-controlled inputs need the native setter):
    `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(el, "text"); el.dispatchEvent(new Event("input",{bubbles:true}));`
 5. After any click/navigation, wait 2-4s and re-read the DOM to confirm what actually happened before the next action.
