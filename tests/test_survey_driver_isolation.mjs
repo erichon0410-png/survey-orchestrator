@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { preparePrompt, buildNudgePrompt, PORT_TO_PLATFORM } from "../scripts/survey_driver.mjs";
+import path from "node:path";
+import os from "node:os";
+import { preparePrompt, buildNudgePrompt, PORT_TO_PLATFORM, pruneExcessTabs } from "../scripts/survey_driver.mjs";
+import { cleanupScreenshots } from "../scripts/cleanup_screenshots.mjs";
 
 console.log("Testing survey_driver port isolation & prompt preparation...");
 
-// 1. Check PORT_TO_PLATFORM
-assert.ok(PORT_TO_PLATFORM[3013], "Must have platform mapping for 3013");
-assert.ok(PORT_TO_PLATFORM[3016], "Must have platform mapping for 3016");
-assert.ok(PORT_TO_PLATFORM[3017], "Must have platform mapping for 3017");
+// 1. Check 3/2 split PORT_TO_PLATFORM
+assert.equal(PORT_TO_PLATFORM[3013], "surveyjunkie", "Port 3013 must map to surveyjunkie");
+assert.equal(PORT_TO_PLATFORM[3014], "swagbucks", "Port 3014 must map to swagbucks");
+assert.equal(PORT_TO_PLATFORM[3015], "surveyjunkie", "Port 3015 must map to surveyjunkie");
+assert.equal(PORT_TO_PLATFORM[3016], "surveyjunkie", "Port 3016 must map to surveyjunkie");
+assert.equal(PORT_TO_PLATFORM[3017], "swagbucks", "Port 3017 must map to swagbucks");
 
 // 2. Test preparePrompt for port 3013
 const rawPrompt = fs.readFileSync("prompts/survey_agent_prompt.txt", "utf8");
@@ -18,11 +23,14 @@ assert.ok(prepared3013.includes("http://127.0.0.1:3013/cdp/json"), "Must contain
 assert.ok(prepared3013.includes("=== STRICT PORT BINDING & ISOLATION (MANDATORY) ==="), "Must include strict isolation block");
 assert.ok(prepared3013.includes("NEVER fetch, scan, query, or connect to port 3015"), "Must forbid connecting to 3015");
 assert.ok(prepared3013.includes("Start survey"), "Must include SurveyJunkie Start survey selector");
+assert.ok(prepared3013.includes("=== TAB HYGIENE & STRICT 3-TAB CEILING ==="), "Must include tab hygiene block");
+assert.ok(prepared3013.includes("Maximum 3 tabs open"), "Must specify max 3 tabs ceiling");
 
 // 3. Test preparePrompt for port 3017
 const prepared3017 = preparePrompt({ rawPrompt, port: 3017 });
 assert.ok(prepared3017.includes("http://127.0.0.1:3017/cdp/json"), "Must contain port 3017 CDP URL");
 assert.ok(prepared3017.includes("Start Survey"), "Must include Swagbucks Start Survey selector");
+assert.ok(prepared3017.includes("Issue B Resolution"), "Must include Issue B resolution instructions");
 
 // 4. Test buildNudgePrompt
 const nudge3013 = buildNudgePrompt(3013);
@@ -35,5 +43,19 @@ assert.ok(nudge3015.includes("Port 3015"), "Nudge must mention Port 3015");
 assert.ok(nudge3015.includes("NEVER connect to other ports (3013, 3014, 3016, 3017)"), "Port 3015 must exclude itself");
 assert.ok(!nudge3015.includes("NEVER connect to port 3015"), "Port 3015 must not ban itself");
 
-console.log("PASS survey_driver port isolation tests passed successfully!");
+// 5. Test pruneExcessTabs against live container
+const pruneResult = await pruneExcessTabs(3013, 3);
+assert.ok(typeof pruneResult.closed === "number", "pruneExcessTabs must return number of closed tabs");
+assert.ok(typeof pruneResult.remaining === "number", "pruneExcessTabs must return number of remaining tabs");
+assert.ok(pruneResult.remaining <= 3, "pruneExcessTabs must keep <= 3 tabs");
+
+// 6. Test cleanupScreenshots
+const testTmpShot = path.join(os.tmpdir(), `shot_test_${Date.now()}.png`);
+fs.writeFileSync(testTmpShot, "dummy-png");
+const cleanRes = cleanupScreenshots({ olderThanMs: 0 });
+assert.ok(!fs.existsSync(testTmpShot), "cleanupScreenshots must purge temporary shot files");
+assert.ok(cleanRes.filesRemoved >= 1, "cleanupScreenshots must report at least 1 removed file");
+
+console.log("PASS survey_driver port isolation, tab pruning, and cleanup tests passed successfully!");
+
 

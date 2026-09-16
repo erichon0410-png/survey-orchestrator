@@ -1,5 +1,13 @@
 FROM lscr.io/linuxserver/chromium:latest
 
+# Install Playwright and dependencies for browser automation
+RUN apt-get update -y && apt-get install -y curl
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+RUN apt-get install -y nodejs
+RUN npm install -g @playwright/test@latest playwright@latest
+RUN npx playwright install chromium
+RUN npx playwright install-deps chromium
+
 # Patch /defaults/default.conf so init-nginx generates /etc/nginx/sites-available/default
 # with the /cdp/ reverse proxy location block (mapping /cdp/ -> http://127.0.0.1:9222/)
 RUN sed -i '/location SUBFOLDER {/i \  location /cdp/ {\n    proxy_pass http://127.0.0.1:9222/;\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection "upgrade";\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n    proxy_read_timeout 3600s;\n    proxy_send_timeout 3600s;\n  }' /defaults/default.conf

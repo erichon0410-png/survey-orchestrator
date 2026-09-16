@@ -9,9 +9,9 @@ export const PORT_TO_CHANNEL = {
 };
 
 export const PORT_TO_PLATFORM = {
-  3013: "OpinionOutpost",
+  3013: "SurveyJunkie",
   3014: "Swagbucks",
-  3015: "Eureka",
+  3015: "SurveyJunkie",
   3016: "SurveyJunkie",
   3017: "Swagbucks (2)",
 };

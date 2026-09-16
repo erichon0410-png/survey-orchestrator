@@ -13,9 +13,9 @@ const LOGS_DIR = path.join(ROOT, "logs");
 const CDP_CONTROL = path.join(ROOT, "scripts", "cdp_control.mjs");
 
 const PLATFORMS = {
-  3013: "OpinionOutpost",
+  3013: "SurveyJunkie",
   3014: "Swagbucks",
-  3015: "Eureka",
+  3015: "SurveyJunkie",
   3016: "SurveyJunkie",
   3017: "Swagbucks 2",
 };

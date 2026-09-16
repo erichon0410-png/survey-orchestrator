@@ -25,11 +25,11 @@ const PROCESSED = path.join(ROOT, "reports", "processed");
 const USAGE_LIMIT_FILE = path.join(INBOX, "FLEET_USAGE_LIMIT_EXHAUSTED.json");
 
 const FLEET_CONFIG = [
-  { port: 3013, platform: "OpinionOutpost", container: "survey-agent-3013" },
-  { port: 3014, platform: "Swagbucks", container: "survey-agent-3014" },
-  { port: 3015, platform: "Eureka", container: "survey-agent-3015" },
-  { port: 3016, platform: "SurveyJunkie", container: "survey-agent-3016" },
-  { port: 3017, platform: "Swagbucks 2", container: "survey-agent-3017" },
+  { port: 3013, platform: "SurveyJunkie", container: "SurveyCompleter-gmail-03" },
+  { port: 3014, platform: "Swagbucks", container: "SurveyCompleter-gmail-04" },
+  { port: 3015, platform: "SurveyJunkie", container: "SurveyCompleter-gmail-05" },
+  { port: 3016, platform: "SurveyJunkie", container: "SurveyCompleter-gmail-06" },
+  { port: 3017, platform: "Swagbucks 2", container: "SurveyCompleter-gmail-07" },
 ];
 
 function getPsLines() {

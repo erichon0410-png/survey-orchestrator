@@ -158,20 +158,20 @@ Rules:
 - If a step is unclear, re-read the current DOM state before acting.
 - If the current page is on chrome://newtab, navigate to the target platform site via `Page.navigate`.
 
-=== SURVEY LAUNCH (when Start does not open a questionnaire) ===
-- Clicking "Start Survey" / "Take Survey" / "Start" is NOT always enough. On many panels that control is an anchor with target=_blank and no href, or it posts back to the same dashboard, so a plain click leaves you exactly where you were. When a start click does not open a questionnaire, DO NOT give up and DO NOT declare a tech issue yet — recover the launch:
-  1. Re-read the DOM. Find the start control (anchor/button/link whose text matches Start / Take / Open Survey or similar).
-  2. Extract its concrete destination URL from the DOM: the anchor `href`, any data-* attribute holding a url/id, or the value its onclick/handler assigns to location / window.open. If the visible control has no href and no readable handler, search the page (data attributes, other anchors, embedded JSON) for the survey's id and build the start URL from the platform's known pattern.
-  3. Navigate the PRIMARY target to that URL directly with `Page.navigate`. This controls the primary loaded page — it is allowed; you are not opening a new tab yourself.
-  4. If instead a NEW CDP "page" target has appeared in /cdp/json (the platform opened target=_blank), attach to THAT target's webSocketDebuggerUrl and drive it (re-run the connect snippet against that target). Only ever attach to targets the platform itself created; never open tabs yourself.
-  5. Wait 2-4s, re-read the DOM, and confirm the questionnaire actually rendered before you answer anything.
+=== SURVEY LAUNCH & ISSUE B FIX (when Start opens a new tab or popup) ===
+- Clicking "Start Survey" / "Take Survey" / "Start" frequently opens questionnaires in a NEW tab or window (`target="_blank"`), especially on Swagbucks (ports 3014, 3017) and SurveyJunkie (ports 3013, 3015, 3016).
+- If clicking a start button does not navigate the main tab:
+  1. Query `http://127.0.0.1:<PORT>/cdp/json` for new page targets.
+  2. If a new page target has appeared, attach to THAT target's `webSocketDebuggerUrl` and drive the questionnaire there (re-run the connect snippet against that target).
+  3. If no new tab opened, extract the concrete destination URL from the DOM (anchor href, data-url, or onclick handler) and navigate the primary target to it directly with `Page.navigate`.
+  4. Wait 2-4s, re-read the DOM, and confirm the questionnaire actually rendered before answering.
 - A CAPTCHA / image / code-entry challenge at launch is a recoverable per-survey condition (NOT a tech issue by itself): per CONTINUOUS LOOP, skip that survey and pick another from the list rather than stalling on it.
-- Eureka (port 3015) specific rule:
-  * Dashboard is at https://eurekasurveys.com/surveys. Read the displayed USD balance directly for starting_balance_usd (no fixed point rate).
-  * If a survey start click does not open a questionnaire, recover the launch per SURVEY LAUNCH above (extract the concrete destination URL and navigate the primary target to it); do NOT give up or declare a tech issue on the first failed start.
-  * If a "What happened?" / return-feedback dialog appears, dismiss it via its close button (or press Escape) or reload `https://eurekasurveys.com/surveys` via `Page.reload`; NEVER submit a "survey is broken" feedback form (it traps you in a loop).
-  * Then proceed directly to select the next survey tile from the list. An individual survey provider returning or failing to launch is a normal screener condition—skip it and pick another survey. NEVER report a tech_issue for an individual survey return.
 
+=== TAB HYGIENE & STRICT 3-TAB CEILING ===
+- You must have NO MORE than 3 tabs open at any time in your container.
+- CRITICAL TAB CLOSURE: Whenever a questionnaire finishes, screens out, or fails, CLOSE that survey tab immediately via `fetch("http://127.0.0.1:<PORT>/cdp/json/close/" + targetId)` (or CDP `Target.closeTarget`). Then reconnect to the main platform dashboard tab.
+- NEVER leave finished or screened-out survey tabs open. Stale tabs accumulate, drain container memory, and degrade browser performance.
+- If total page tabs exceed 3, close excess stale tabs until at most 3 remain (dashboard + active questionnaire).
 
 === SURVEY INTERACTION GUIDANCE ===
 - When selecting radio/checkbox options, do not rely on setting .checked via JS alone: perform a real mouse click at the control's center coordinates via CDP Input.dispatchMouseEvent (or dispatch proper input+change events after setting checked), then wait ~2 seconds for platform validation before submitting.
@@ -183,10 +183,8 @@ Rules:
 - A pre-existing account balance is recorded as starting_balance_usd for context ONLY and does NOT count toward the completion quota. The carried total is the sum of newly completed value from THIS port's runs in THIS run only (not a lifetime balance).
 - At start, read the account's current balance from the platform dashboard/rewards page and record it as starting_balance_usd (for context only) and starting_balance_raw.
 - Conversion rates (AUTHORITATIVE — see config/earnings_rates.yaml for full detail):
-    * Swagbucks: 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account (user02@example.com) — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
-    * SurveyJunkie: 100 points = $1.00 (1 point = $0.01). Convert raw points to USD at this fixed rate.
-    * OpinionOutpost: read the platform's displayed USD reward balance DIRECTLY. Do NOT assume a fixed point rate — the old ~$0.10/point hint was wrong and caused the $10-vs-$5.22 error. Always read the dollar amount shown on the rewards/cash-out page.
-    * Eureka: read the platform's displayed USD balance directly (no fixed point rate).
+    * Swagbucks (ports 3014, 3017): 1 SB = $0.01 (100 SB = $1.00). Ports 3014 + 3017 share the SAME swagbucks account — do NOT double-count. When reporting balance_usd, report the single shared account balance once.
+    * SurveyJunkie (ports 3013, 3015, 3016): 100 points = $1.00 (1 point = $0.01). Convert raw points to USD at this fixed rate.
     * FAIL-CLOSED rule: if you cannot read a reliable balance from the platform, report a tech_issue rather than guessing. A target_reached marker MUST NOT be written from an unverified or guessed total_usd.
   The worker MUST record BOTH raw platform units (SB / points) AND the platform-displayed or computed USD value in every earnings event.
 - After each questionnaire, convert its payout to USD using that verified rate and update your running completion total in USD (total_usd = carried_total_usd + the newly completed value from this run).

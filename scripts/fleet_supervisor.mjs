@@ -30,6 +30,7 @@ import { syncEarnings } from "./earnings_sync.mjs";
 import { createAutoFixer } from "./auto_fixer.mjs";
 import { driverKillPattern } from "./driver_kill.mjs";
 import { createEventHub } from "./observability_hub.mjs";
+import { cleanupScreenshots } from "./cleanup_screenshots.mjs";
 
 // Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
 // Override with SURVEY_ROOT if the checkout lives elsewhere.
@@ -597,13 +598,16 @@ export async function tick() {
       lastEarningsSyncDate = todayStr;
       try {
         const syncRes = syncEarnings({ dailyHeartbeat: true });
+        let shotClean = { filesRemoved: 0, bytesFreed: 0 };
+        try { shotClean = cleanupScreenshots(); } catch {}
         appendSupervisorLog({
           ts: iso(),
           action: "daily_sync",
           markers_processed: syncRes.markersProcessed,
           heartbeats_appended: syncRes.heartbeatsAppended?.length ?? 0,
           graph_rebuilt: syncRes.graphRebuilt,
-          note: "daily earnings sync and graph refresh complete",
+          screenshots_purged: shotClean.filesRemoved,
+          note: "daily earnings sync, graph refresh, and screenshot cleanup complete",
         });
       } catch (e) {
         appendSupervisorLog({
@@ -808,6 +812,7 @@ export async function shutdown() {
   try {
     publishSupervisorEvent("supervisor_stopped", "supervisor stopped");
     appendSupervisorLog({ ts: iso(), event: "supervisor_stopped" });
+    try { cleanupScreenshots(); } catch {}
     if (eventHub) await eventHub.stop();
   } catch {}
   process.exit(0);

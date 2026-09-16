@@ -107,9 +107,9 @@ const RATE_TABLE = {
 };
 
 export const PORT_TO_PLATFORM = {
-  3013: "opinionoutpost",
+  3013: "surveyjunkie",
   3014: "swagbucks",
-  3015: "eureka",
+  3015: "surveyjunkie",
   3016: "surveyjunkie",
   3017: "swagbucks",
 };
@@ -183,15 +183,20 @@ export function preparePrompt({ rawPrompt, port }) {
       : `NEVER fetch, scan, query, or connect to port 3015 or any other port. Connecting to any port other than ${port} is an instant critical failure.`,
     `Every single CDP target query, WebSocket connection, and status log line MUST use port ${port} and logs/agent_${port}_status.jsonl.`,
     "",
-    "=== PLATFORM DASHBOARD LAUNCH SELECTORS ===",
-    "- SurveyJunkie (ports 3013, 3016):",
+    "=== TAB HYGIENE & STRICT 3-TAB CEILING ===",
+    "- Maximum 3 tabs open at any time in your container.",
+    "- When launching surveys that open in new tabs/windows (target=_blank), attach to and drive that tab.",
+    "- When a questionnaire is completed, screened out, or fails, CLOSE that survey tab immediately (via `fetch('http://127.0.0.1:" + port + "/cdp/json/close/' + targetId)` or CDP Target.closeTarget) and switch back to the main dashboard tab.",
+    "- Never accumulate tabs! Any container with >3 tabs will have excess tabs automatically pruned.",
+    "",
+    "=== PLATFORM DASHBOARD LAUNCH SELECTORS & ISSUE B RESOLUTION ===",
+    "- SurveyJunkie (ports 3013, 3015, 3016):",
     "  * Look for button with text 'Start survey': `[...document.querySelectorAll('button')].find(b => b.textContent.includes('Start survey'))`",
     "  * Use `await mouseClick(btn)` with physical mouse dispatch to click it.",
     "- Swagbucks (ports 3014, 3017):",
     "  * Look for button with text 'Start Survey': `[...document.querySelectorAll('button')].find(b => b.textContent.includes('Start Survey'))`",
     "  * Or survey row cards showing SB rewards.",
-    "- Eureka (port 3015):",
-    "  * Look for `.SurveyCard_container` or cards with point/cent payouts.",
+    "  * Issue B Resolution: Swagbucks frequently launches questionnaires in a NEW tab or window. If clicking 'Start Survey' does not navigate the main tab, inspect `http://127.0.0.1:" + port + "/cdp/json` for new targets, connect to the new tab's `webSocketDebuggerUrl`, and drive the questionnaire there.",
     "",
     "=== IDENTITY & ANTI-REFUSAL MANDATE ===",
     "- Account greeting (e.g. 'Good evening, Eric', 'Eric') vs respondent profile ('Mei Lin Chen'):",
@@ -327,6 +332,62 @@ function writeIdleTodayMarker() {
     log("info", "wrote idle_today marker", { path: markerPath });
   } catch (e) {
     log("warn", "could not write idle_today marker", { err: String(e) });
+  }
+}
+
+// ---------- tab hygiene & pruning (<= 3 tabs) ----------
+
+/**
+ * Prunes excess browser tabs via CDP HTTP endpoints, enforcing a strict ceiling (default <= 3 tabs).
+ * Preserves the primary platform dashboard tab and the most recent active survey tab.
+ *
+ * @param {number} port - Container CDP port (e.g. 3013-3017)
+ * @param {number} maxTabs - Maximum tabs to keep (default 3)
+ * @returns {Promise<{closed: number, remaining: number, error?: string}>}
+ */
+export async function pruneExcessTabs(port, maxTabs = 3) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/cdp/json`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return { closed: 0, remaining: 0 };
+    const targets = await res.json();
+    const pages = targets.filter((t) => t.type === "page");
+    if (pages.length <= maxTabs) {
+      return { closed: 0, remaining: pages.length };
+    }
+
+    const platform = PORT_TO_PLATFORM[port] || "";
+    // Identify primary dashboard tab
+    let dashboardIndex = pages.findIndex((p) => {
+      if (platform === "surveyjunkie" && p.url.includes("surveyjunkie.com")) return true;
+      if (platform === "swagbucks" && p.url.includes("swagbucks.com")) return true;
+      return false;
+    });
+    if (dashboardIndex === -1) dashboardIndex = 0;
+
+    const dashboardTab = pages[dashboardIndex];
+    const latestTab = pages[pages.length - 1];
+
+    const keepIds = new Set();
+    keepIds.add(dashboardTab.id);
+    keepIds.add(latestTab.id);
+
+    // Keep most recent tabs up to maxTabs
+    for (let i = pages.length - 1; i >= 0 && keepIds.size < maxTabs; i--) {
+      keepIds.add(pages[i].id);
+    }
+
+    let closed = 0;
+    for (const p of pages) {
+      if (!keepIds.has(p.id)) {
+        try {
+          await fetch(`http://127.0.0.1:${port}/cdp/json/close/${p.id}`, { signal: AbortSignal.timeout(2000) });
+          closed++;
+        } catch {}
+      }
+    }
+    return { closed, remaining: pages.length - closed };
+  } catch (e) {
+    return { closed: 0, remaining: 0, error: e.message };
   }
 }
 
@@ -832,8 +893,25 @@ async function main() {
       });
     }
 
+    // Tab hygiene guard: enforce strict 3-tab ceiling before turn starts
+    try {
+      const pruneRes = await pruneExcessTabs(PORT, 3);
+      if (pruneRes.closed > 0) {
+        log("info", `pruned ${pruneRes.closed} excess tabs before turn ${turn} (remaining: ${pruneRes.remaining})`);
+      }
+    } catch {}
+
     const res = await runTurn(argsArr);
     state.child = null;
+
+    // Post-turn tab hygiene: prune any runaway tabs left by completed/abandoned surveys
+    try {
+      const postPrune = await pruneExcessTabs(PORT, 3);
+      if (postPrune.closed > 0) {
+        log("info", `post-turn pruned ${postPrune.closed} excess tabs (remaining: ${postPrune.remaining})`);
+      }
+    } catch {}
+
     log("info", `turn ${turn} ended`, { code: res.code, signal: res.signal ?? null, threadId: res.threadId ?? null });
     if (pub) {
       pub.publish({

@@ -33,4 +33,5 @@ echo "[svc-chromium] Launching Chromium under user abc (remote-debugging-port=92
 exec s6-setuidgid abc /usr/bin/wrapped-chromium \
   --enable-features=UseOzonePlatform \
   --ozone-platform=wayland \
-  --remote-debugging-port=9222
+  --remote-debugging-port=9222 \
+  "https://www.swagbucks.com/surveys"

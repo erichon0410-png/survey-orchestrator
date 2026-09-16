@@ -20,9 +20,9 @@ check("maps ports to correct discord channels and platforms", () => {
   assert.equal(PORT_TO_CHANNEL[3015], "discord:#agent-3015");
   assert.equal(PORT_TO_CHANNEL[3016], "discord:#agent-3016");
   assert.equal(PORT_TO_CHANNEL[3017], "discord:#agent-3017");
-  assert.equal(PORT_TO_PLATFORM[3013], "OpinionOutpost");
+  assert.equal(PORT_TO_PLATFORM[3013], "SurveyJunkie");
   assert.equal(PORT_TO_PLATFORM[3014], "Swagbucks");
-  assert.equal(PORT_TO_PLATFORM[3015], "Eureka");
+  assert.equal(PORT_TO_PLATFORM[3015], "SurveyJunkie");
   assert.equal(PORT_TO_PLATFORM[3016], "SurveyJunkie");
   assert.equal(PORT_TO_PLATFORM[3017], "Swagbucks (2)");
 });
@@ -70,7 +70,7 @@ check("generates per-agent markdown digest and fleet rollup", () => {
   assert.ok(d3013, "Should have digest for 3013");
   assert.equal(d3013.channel, "discord:#agent-3013");
   assert.equal(d3013.hasActivity, true);
-  assert.ok(d3013.markdown.includes("OpinionOutpost"), "Should mention platform");
+  assert.ok(d3013.markdown.includes("SurveyJunkie"), "Should mention platform");
   assert.ok(d3013.markdown.includes("Auto Insurance Study"), "Should mention survey title");
   assert.ok(d3013.markdown.includes("$1.25"), "Should mention earnings");
 

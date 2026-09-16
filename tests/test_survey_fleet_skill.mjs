@@ -17,9 +17,9 @@ for (let port = 3013; port <= 3017; port++) {
 assert.ok(skillText.includes("#survey-reports"), "SKILL.md must reference #survey-reports");
 
 // Platform mappings
-assert.ok(skillText.includes("3013") && skillText.includes("OpinionOutpost"), "Must map 3013 to OpinionOutpost");
+assert.ok(skillText.includes("3013") && skillText.includes("SurveyJunkie"), "Must map 3013 to SurveyJunkie");
 assert.ok(skillText.includes("3014") && skillText.includes("Swagbucks"), "Must map 3014 to Swagbucks");
-assert.ok(skillText.includes("3015") && skillText.includes("Eureka"), "Must map 3015 to Eureka");
+assert.ok(skillText.includes("3015") && skillText.includes("SurveyJunkie"), "Must map 3015 to SurveyJunkie");
 assert.ok(skillText.includes("3016") && skillText.includes("SurveyJunkie"), "Must map 3016 to SurveyJunkie");
 assert.ok(skillText.includes("3017") && (skillText.includes("Swagbucks 2") || skillText.includes("Swagbucks (2)")), "Must map 3017 to Swagbucks 2");
 
@@ -39,7 +39,7 @@ assert.equal(statusRun.status, 0, `agent_control status failed: ${statusRun.stde
 const statusJson = JSON.parse(statusRun.stdout.trim());
 assert.equal(statusJson.ok, true);
 assert.equal(statusJson.port, 3013);
-assert.equal(statusJson.platform, "OpinionOutpost");
+assert.equal(statusJson.platform, "SurveyJunkie");
 assert.ok("pageTitle" in statusJson, "Status must include pageTitle");
 assert.ok("pageUrl" in statusJson, "Status must include pageUrl");
 assert.ok("lastEvent" in statusJson, "Status must include lastEvent");
@@ -61,7 +61,7 @@ assert.equal(balanceRun.status, 0, `agent_control balance failed: ${balanceRun.s
 const balanceJson = JSON.parse(balanceRun.stdout.trim());
 assert.equal(balanceJson.ok, true);
 assert.equal(balanceJson.port, 3013);
-assert.equal(balanceJson.platform, "OpinionOutpost");
+assert.equal(balanceJson.platform, "SurveyJunkie");
 assert.ok("totalUsd" in balanceJson, "Balance must include totalUsd");
 assert.ok("totalRaw" in balanceJson, "Balance must include totalRaw");
 
