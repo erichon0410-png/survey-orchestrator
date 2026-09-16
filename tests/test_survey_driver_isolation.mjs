@@ -28,6 +28,12 @@ assert.ok(prepared3017.includes("Start Survey"), "Must include Swagbucks Start S
 const nudge3013 = buildNudgePrompt(3013);
 assert.ok(nudge3013.includes("Port 3013"), "Nudge must mention Port 3013");
 assert.ok(nudge3013.includes("http://127.0.0.1:3013/cdp/json"), "Nudge must remind of bound CDP endpoint");
-assert.ok(nudge3013.includes("NEVER connect to port 3015"), "Nudge must reinforce isolation");
+assert.ok(nudge3013.includes("NEVER connect to other ports (3014, 3015, 3016, 3017)"), "Nudge must reinforce isolation");
+
+const nudge3015 = buildNudgePrompt(3015);
+assert.ok(nudge3015.includes("Port 3015"), "Nudge must mention Port 3015");
+assert.ok(nudge3015.includes("NEVER connect to other ports (3013, 3014, 3016, 3017)"), "Port 3015 must exclude itself");
+assert.ok(!nudge3015.includes("NEVER connect to port 3015"), "Port 3015 must not ban itself");
 
 console.log("PASS survey_driver port isolation tests passed successfully!");
+
