@@ -72,7 +72,8 @@ const MAX_NUDGES = Number.isFinite(args.maxNudges) && args.maxNudges > 0
 export const MAX_TURNS = Number.isFinite(args.maxTurns) && args.maxTurns > 0
   ? Math.floor(args.maxTurns)
   : (Number.isFinite(Number(process.env.SURVEY_MAX_TURNS)) ? Number(process.env.SURVEY_MAX_TURNS) : 10);
-const MODEL = args.model || process.env.SURVEY_MODEL || "gpt-5.6-luna";
+const MODEL = args.model || process.env.SURVEY_MODEL || "stealth/union-alpha";
+const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || "openrouter";
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "low";
 // Hard per-turn hang guard: a single codex turn may legitimately run long (the model polls the
 // platform every ~10 min), so this is generous — it only trips on a TRUE hang (no exit at all).
@@ -800,7 +801,13 @@ async function main() {
   process.on("uncaughtException", (e) => { log("error", "uncaughtException", { err: String(e?.stack || e) }); finishClean(3); });
   process.on("unhandledRejection", (e) => { log("error", "unhandledRejection", { err: String(e) }); });
 
-  const codexBaseFlags = ["--json", "--dangerously-bypass-approvals-and-sandbox", "-m", MODEL, "-c", `model_reasoning_effort=${EFFORT}`];
+  const codexBaseFlags = [
+    "--json",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-m", MODEL,
+    ...(PROVIDER ? ["-c", `model_provider="${PROVIDER}"`] : []),
+    "-c", `model_reasoning_effort=${EFFORT}`,
+  ];
   let sessionId = null;
 
   while (true) {
