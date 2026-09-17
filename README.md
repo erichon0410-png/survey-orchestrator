@@ -1,141 +1,184 @@
 # Survey Orchestrator
 
-Multi-agent survey completion system. Spawns Codex agents bound to browser containers
-to farm surveys on reward platforms (Swagbucks, Opinion Outpost, Eureka, Survey Junkie)
-as a consistent persona.
+High-performance multi-agent survey completion fleet. Spawns autonomous browser workers bound to isolated Docker containers to farm questionnaires on reward platforms (Swagbucks, Survey Junkie, Eureka, Opinion Outpost) using the consistent **Mei Lin Chen** respondent profile.
 
-## Architecture
+---
+
+## 🏗 Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  survey-orchestrator (this repo)                        │
-│                                                         │
-│  config/survey_config.yaml   ← agent/container binding  │
-│  personas/mei_lin_chen.yaml  ← shared persona profile   │
-│  prompts/survey_agent_prompt.txt ← OVERRIDE + task      │
-│  survey_orchestrator/        ← Python orchestration pkg │
-└─────────────────────────────────────────────────────────┘
-         │  spawns via: codex exec -m <model> "<prompt>"
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ survey-orchestrator                                                         │
+│                                                                             │
+│  scripts/fleet_supervisor.mjs    ← Fleet orchestration, health watchdog     │
+│  scripts/survey_driver.mjs       ← Per-agent multi-turn lifecycle driver    │
+│  scripts/deploy_fleet.mjs        ← Flexible CLI agent launcher              │
+│  scripts/cdp_control.mjs         ← High-level Chrome DevTools CLI helper   │
+│  scripts/survey_agent.patch.yml  ← Cordis profile patch (tools + providers) │
+│  prompts/survey_agent_prompt.txt ← Anti-refusal persona + survey guidance   │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         ├── Harness: DSH Headless (Default) or Codex CLI
+         ├── Serving: Unsloth Studio, Raw llama.cpp, or Cloud (OpenRouter / OpenAI)
          ▼
-┌─────────────────────────────────────────────────────────┐
-│  Docker Containers (browser sandboxes)                  │
-│                                                         │
-│  SurveyCompleter-gmail-03 → port 3013                  │
-│  SurveyCompleter-gmail-04 → port 3014                  │
-│  SurveyCompleter-gmail-05 → port 3015                  │
-│  SurveyCompleter-gmail-06 → port 3016                  │
-│  SurveyCompleter-gmail-07 → port 3017                  │
-│                                                         │
-│  Each: Debian 13, Chromium 151, nginx :3000/:3001      │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Docker Browser Containers (Debian 13, Chromium, CDP proxy on :3000)         │
+│                                                                             │
+│  Port 3013 ──▶ SurveyCompleter-gmail-03 (Survey Junkie)                     │
+│  Port 3014 ──▶ SurveyCompleter-gmail-04 (Swagbucks)                         │
+│  Port 3015 ──▶ SurveyCompleter-gmail-05 (Survey Junkie)                     │
+│  Port 3016 ──▶ SurveyCompleter-gmail-06 (Survey Junkie)                     │
+│  Port 3017 ──▶ SurveyCompleter-gmail-07 (Swagbucks)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start: Cloning Elsewhere
+---
 
-To clone and set up the orchestrator on another computer (under WSL or Linux):
+## ⚡ Quick Start
 
+### 1. Requirements
+- **Node.js**: v20+ (Node 22 recommended)
+- **Docker Compose**: Running the 5 `SurveyCompleter` browser containers
+- **LLM Serving Engine**: Any OpenAI-compatible server (local `llama-server`, `Unsloth Studio`, or cloud APIs)
+
+### 2. Deploying the Fleet
 ```bash
-# Clone the repository (adjust the target dir to wherever you keep checkouts)
-git clone https://github.com/erichon0410-png/survey-orchestrator.git ~/workspace/survey-orchestrator
-cd ~/workspace/survey-orchestrator
+# Deploy all 5 agents (defaults to DSH headless + local model)
+node scripts/deploy_fleet.mjs
 
-# (Or using GitHub CLI if authenticated)
-gh repo clone erichon0410-png/survey-orchestrator ~/workspace/survey-orchestrator
-cd ~/workspace/survey-orchestrator
+# Deploy specific ports only (e.g. Swagbucks 3014 and SurveyJunkie 3013)
+node scripts/deploy_fleet.mjs 3013 3014
 
-# Install dependencies in editable mode
-pip install -e .
-# or: pip install -r requirements.txt
+# Check fleet and container health
+node scripts/fleet_status.mjs
+
+# Gracefully halt the entire fleet
+node scripts/stop_fleet.mjs
 ```
 
-## Account Configuration (`config/survey_config.yaml`)
+---
 
-Before launching agents, you must populate your account credentials in [`config/survey_config.yaml`](./config/survey_config.example.yaml). Copy the committed template first — `cp config/survey_config.example.yaml config/survey_config.yaml` — then edit that copy (it is git-ignored, so real credentials stay local).
+## ⚙️ Model Serving Configuration
 
-### Step-by-Step Setup
+The orchestrator supports **local GPU serving** (raw `llama.cpp` or `Unsloth Studio`) and **cloud models** (OpenRouter, OpenAI).
 
-1. Open `config/survey_config.yaml` in your editor.
-2. Locate each agent entry under `agents:` (ports 3013–3017).
-3. Under the `account:` block for each agent, replace the placeholder values:
-   ```yaml
-   agents:
-     - name: agent-03
-       container: SurveyCompleter-gmail-03
-       port: 3013
-       model: gpt-5.6-luna
-       reasoning_effort: medium
-       persona: personas/mei_lin_chen.yaml
-       platforms: [opinionoutpost]
-       account:
-         email: "YOUR_EMAIL_HERE"         # <--- Enter your platform login email
-         password: "YOUR_PASSWORD_HERE"   # <--- Enter your platform password
-         status: pending-login            # Change to logged-in-verified once verified
+### Option A: Local Serving with `llama.cpp` (Raw `llama-server`)
+
+To run completely locally on an RTX GPU (e.g. RTX 5080, 4090, 3090):
+
+1. **Launch `llama-server`**:
+   ```powershell
+   # Windows Host (PowerShell)
+   llama-server.exe -m C:\path\to\Ornith-1.5-9B-Q4_K_M.gguf `
+     --port 8080 `
+     --parallel 3 `
+     --flash-attn on `
+     -c 122880 `
+     --cache-type-k q4_0 `
+     --cache-type-v q4_0 `
+     --spec-type draft-mtp `
+     -ngl 99
    ```
-4. Configure all agent platform assignments:
-   - **`agent-03`** (Port 3013): Opinion Outpost (`opinionoutpost`)
-   - **`agent-04`** (Port 3014): Swagbucks (`swagbucks`)
-   - **`agent-05`** (Port 3015): Eureka (`eureka`)
-   - **`agent-06`** (Port 3016): Survey Junkie (`surveyjunkie`)
-   - **`agent-07`** (Port 3017): Swagbucks / Secondary (`swagbucks`)
+2. **Configure Orchestrator Environment**:
+   ```bash
+   export SURVEY_HARNESS="dsh"
+   export SURVEY_MODEL_PROVIDER="llama-cpp"
+   export SURVEY_MODEL="Ornith-1.5-9B-Q4_K_M"
+   export LLAMA_CPP_BASE_URL="http://127.0.0.1:8080/v1" # or Windows gateway IP under WSL
+   ```
 
-> [!TIP]
-> You can also save a local untracked configuration copy at `config/survey_config.yaml.local`. The repository `.gitignore` is pre-configured to ignore all `*.local.yaml` files and environment files (`.env`), keeping your actual credentials safe from git commits.
+### Option B: Local Serving with Unsloth Studio
 
-## Running Agents
-
-Each agent is launched via `codex exec` using the prompt template. Run from the project root:
+If using Unsloth Studio with speculative decoding and automatic port proxying:
 
 ```bash
-# Single agent (e.g. bound to container 3014)
-codex exec --dangerously-bypass-approvals-and-sandbox \
-  -m gpt-5.6-luna \
-  -c model_reasoning_effort=medium \
-  "$(cat prompts/survey_agent_prompt.txt)" < /dev/null
-
-# All agents in parallel (background)
-for port in 3013 3014 3015 3016 3017; do
-  codex exec --dangerously-bypass-approvals-and-sandbox \
-    -m gpt-5.6-luna \
-    -c model_reasoning_effort=medium \
-    "$(cat prompts/survey_agent_prompt.txt)" < /dev/null \
-    > "logs/agent_${port}.log" 2>&1 &
-done
+export SURVEY_HARNESS="dsh"
+export SURVEY_MODEL_PROVIDER="unsloth-studio"
+export SURVEY_MODEL="Ornith-1.5-9B-Q4_K_M"
+export UNSLOTH_STUDIO_API_KEY="sk-unsloth-your-token"
+export UNSLOTH_STUDIO_BASE_URL="http://tank.tail576f3e.ts.net:8080/v1" # or your local studio endpoint
 ```
 
-### Automated Fleet Management
+### Option C: Cloud Models (OpenRouter / OpenAI)
 
-If using the background fleet scripts:
+To drive the fleet using cloud models:
+
 ```bash
-# Run fleet watcher / supervisor
-node scripts/fleet_supervisor.mjs
+# Via OpenRouter (Claude 3.5 Sonnet, DeepSeek V3, etc.)
+export SURVEY_MODEL_PROVIDER="openrouter"
+export SURVEY_MODEL="anthropic/claude-3.5-sonnet"
+export OPENROUTER_API_KEY="sk-or-v1-..."
+
+# Or via OpenAI directly
+export SURVEY_MODEL_PROVIDER="openai"
+export SURVEY_MODEL="gpt-4o"
+export OPENAI_API_KEY="sk-..."
 ```
 
-## Key Files & Directories
+---
 
-| Path | Description |
-|------|-------------|
-| `config/survey_config.yaml` | Agent definitions, platform bindings, execution settings |
-| `personas/mei_lin_chen.yaml` | Persona profile (Mei Lin Chen, 32F Asian/Chinese, Columbus OH) |
-| `prompts/survey_agent_prompt.txt` | Complete agent prompt template with OVERRIDE header |
-| `survey_orchestrator/` | Python package: CLI (`survey-orch`), executor, models, workers |
-| `scripts/` | Fleet supervisor and survey driving automation scripts |
-| `logs/` | Runtime logs (ignored by git, preserved with `.gitkeep`) |
-| `reports/` | Survey outcome & error reports inbox/processed (ignored by git, preserved with `.gitkeep`) |
-| `output/` | Status summaries & run outputs (ignored by git, preserved with `.gitkeep`) |
+## 🎛 Choosing Your Agent Harness
 
-## Persona Integrity
+The driver supports two primary agent harnesses via `--harness` or `SURVEY_HARNESS`:
 
-All agents share one authoritative persona profile: **Mei Lin Chen**.
-- Location: Columbus, Ohio (ZIP 43065)
-- Demographics: 32, Female, Asian/Chinese, Married, 1 child
-- Education & Work: PhD, Healthcare/Medical decision maker
-- Household Income: $125k–$150k
+| Harness | Flag / Value | How it Works & Tools Provided |
+| :--- | :--- | :--- |
+| **DSH Headless** *(Default & Recommended)* | `--harness dsh` | Runs lightweight headless DSH sessions using `scripts/survey_agent.patch.yml`. Injects native `@deepseek-ai/dsh-tool-use-browser` CDP controls and bash for `cdp_control.mjs`. |
+| **Codex CLI** | `--harness codex` | Runs standalone `codex exec` turns with multi-turn resume. Interacts via Node REPL (`mcp__node_repl__js`) or Playwright. |
 
-> [!IMPORTANT]
-> Do not remove or alter `personas/mei_lin_chen.yaml`. All survey answers must remain strictly aligned with Mei Lin Chen's demographic data across all platforms to maintain account standing and survey qualification consistency.
+You can override this on the fly:
+```bash
+# Run port 3014 using Codex with OpenRouter
+node scripts/survey_driver.mjs --port 3014 --harness codex --provider openrouter --model anthropic/claude-3.5-sonnet
 
-## Notes & Operational Tips
+# Run port 3013 using DSH with local llama-server
+node scripts/survey_driver.mjs --port 3013 --harness dsh --provider llama-cpp --model Ornith-1.5-9B-Q4_K_M
+```
 
-- The `OVERRIDE` header in `prompts/survey_agent_prompt.txt` directs the model to assume the persona directly rather than roleplaying.
-- `gpt-5.6-luna` is the default model; if refusals occur, a less-aligned fallback model can be passed with `-m`.
-- Container browser displays can be inspected live via Chromium CDP / Selkies streams over the mapped ports.
+---
+
+## 🌐 Connecting Agents to Browser Containers
+
+Each browser container exposes its Chrome DevTools Protocol (CDP) through an internal Nginx proxy:
+* **HTTP Endpoint**: `http://127.0.0.1:<PORT>/cdp/json`
+* **WebSocket Endpoint**: `ws://127.0.0.1:<PORT>/cdp`
+
+### Workspace CDP Control Helper (`scripts/cdp_control.mjs`)
+Agents and operators can interact with any container directly from the terminal:
+
+```bash
+# 1. List active browser tabs
+node scripts/cdp_control.mjs targets 3013
+
+# 2. Evaluate JavaScript / Read DOM
+node scripts/cdp_control.mjs eval 3013 --js "document.title"
+node scripts/cdp_control.mjs eval 3013 --js "document.body.innerText"
+
+# 3. Trusted Mouse Click (by CSS selector)
+node scripts/cdp_control.mjs click 3013 --selector "button.start-survey"
+
+# 4. Trusted Mouse Click (by coordinates)
+node scripts/cdp_control.mjs click 3013 --coords 450,320
+
+# 5. Capture PNG Screenshot
+node scripts/cdp_control.mjs screenshot 3013 -o /tmp/shot_3013.png
+```
+
+---
+
+## 🛡 Reliability & Safety Features
+
+- **Fast-Crash Guard**: If a newly spawned driver crashes or exits with a non-zero code in `< 5000ms`, the supervisor halts further spawns to prevent runaway restart loops.
+- **Tab Ceiling**: Enforces a strict maximum of 3 open tabs per container (`pruneExcessTabs`), closing leaked redirects or orphaned questionnaire popups.
+- **Circuit Breakers & Idle Markers**: Detects platform dry spells ("No surveys available today") and automatically writes `idle_today` markers, saving GPU tokens and API credits.
+- **Unified Clean Exit**: `scripts/stop_fleet.mjs` sweeps both drivers and detached DSH/Codex background processes cleanly.
+
+---
+
+## 🧪 Running Tests
+
+Run the full automated test suite:
+```bash
+npm test
+```
+All 10 test suites (isolation, mouse emulation, fast crash guard, idle timeouts, DSH argument passing, and clean exit) must pass before pushing to production.

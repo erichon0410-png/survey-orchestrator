@@ -13,6 +13,7 @@ const TARGET_PATTERNS = [
   /fleet_supervisor\.mjs/,
   /survey_driver\.mjs/,
   /codex exec/,
+  /(?:^|\/)dsh\s+.*--profile\s+headless/,
   /auto_fixer\.mjs/,
 ];
 

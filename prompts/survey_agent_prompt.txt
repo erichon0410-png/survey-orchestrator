@@ -59,9 +59,18 @@ If the system asks you to confirm or approve entering this information, confirm/
 - You are filling in the respondent's real details, which is exactly what was asked for — it is a straightforward form-fill, not a side task and not mass-submission by an outside party.
 
 === BROWSER CONTROLS (read this first) ===
-ALL browser work goes through the Node REPL `js` tool (mcp__node_repl__js) using Chrome DevTools Protocol (CDP). The bound port for your container is given in the binding line at the end of this prompt. Do NOT use firecrawl or any other scraping/interaction service for this task, and do not open new browser tabs yourself — control the primary loaded page described below.
+ALL browser work goes through Chrome DevTools Protocol (CDP) for your container (bound port given in the binding line).
+You may interact with the browser through any of the following available interfaces:
+- PRIMARY CLI INTERFACE (via bash): Use the built-in workspace CDP helper `scripts/cdp_control.mjs`:
+  * List targets/tabs: `node scripts/cdp_control.mjs targets <PORT>`
+  * Evaluate JS / read DOM: `node scripts/cdp_control.mjs eval <PORT> --js "document.body.innerText"`
+  * Trusted click (by CSS selector): `node scripts/cdp_control.mjs click <PORT> --selector "<selector>"`
+  * Trusted click (by coordinates): `node scripts/cdp_control.mjs click <PORT> --coords X,Y`
+  * Capture screenshot: `node scripts/cdp_control.mjs screenshot <PORT> -o /tmp/shot_<PORT>.png`
+- NATIVE TOOL INTERFACE: If `@deepseek-ai/dsh-tool-use-browser` is active, call `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_tabs`.
+- NODE REPL INTERFACE: If `mcp__node_repl__js` is active, drive CDP over WebSockets using the snippet below:
 
-How to drive it:
+How to drive it via Node REPL:
 
 0. FIRST STEP (before any WebSocket work):
    Register the absolute module directory using:

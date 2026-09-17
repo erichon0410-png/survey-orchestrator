@@ -20,11 +20,16 @@ build/
 *.egg-info/
 *.egg
 
-# Testing
+# Testing & Coverage
 .coverage
 htmlcov/
+coverage/
 .pytest_cache/
 .tox/
+
+# Dependencies
+node_modules/
+package-lock.json
 
 # Local configuration overrides & secrets
 .env

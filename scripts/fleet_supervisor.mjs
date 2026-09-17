@@ -113,6 +113,7 @@ export const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: n
 export const targetPorts = new Set(); // target-reached marker found: never restart again
 export const idleTodayPorts = new Set(); // idle-today marker found: no surveys for today
 export const agentStartTimes = new Map(); // port -> timestamp ms of last deploy/start
+export const fastCrashCounts = new Map(); // port -> consecutive fast crash count
 
 // --- helpers ---
 function iso() {
@@ -738,6 +739,33 @@ export async function tick() {
         // Reset restarts history on resume to give a clean trial deployment
         // instead of leaving it 1 failure away from an immediate re-cap:
         restarts.set(port, []);
+      }
+
+      // Fast-crash guard: if this agent was deployed very recently (< 25s ago)
+      // and is already dead, track fast crashes and pause port on repeated fast crashes.
+      const startTime = agentStartTimes.get(port);
+      if (startTime && (now - startTime) < 25000) {
+        const crashes = (fastCrashCounts.get(port) ?? 0) + 1;
+        fastCrashCounts.set(port, crashes);
+        appendSupervisorLog({
+          ts: iso(),
+          port,
+          action: "fast_crash_detected",
+          note: `port ${port} died within ${now - startTime}ms of launch (fast crash count: ${crashes})`,
+        });
+        if (crashes >= 2) {
+          appendSupervisorLog({
+            ts: iso(),
+            port,
+            action: "fast_crash_cap",
+            note: `port ${port} fast-crashed ${crashes} times consecutively; pausing port for repair`,
+          });
+          capPort(port);
+          fastCrashCounts.delete(port);
+          continue;
+        }
+      } else if (startTime && (now - startTime) >= 60000) {
+        fastCrashCounts.delete(port);
       }
 
       // Restart cap: max 4 restarts per port in any rolling 60-minute window.

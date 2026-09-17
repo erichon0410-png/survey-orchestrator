@@ -87,7 +87,7 @@ loadEnvFiles();
 
 // ---------- arg / env parsing ----------
 function parseArgs(argv) {
-  const out = { port: null, marker: "", promptFile: null, maxNudges: null, maxTurns: null, model: null, provider: null, effort: null };
+  const out = { port: null, marker: "", promptFile: null, maxNudges: null, maxTurns: null, model: null, provider: null, preset: null, effort: null, harness: null, patch: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") out.port = Number(argv[++i]);
@@ -97,7 +97,10 @@ function parseArgs(argv) {
     else if (a === "--max-turns") out.maxTurns = Number(argv[++i]);
     else if (a === "--model") out.model = String(argv[++i]);
     else if (a === "--provider") out.provider = String(argv[++i]);
+    else if (a === "--preset") out.preset = String(argv[++i]);
     else if (a === "--effort") out.effort = String(argv[++i]);
+    else if (a === "--harness") out.harness = String(argv[++i]);
+    else if (a === "--patch") out.patch = String(argv[++i]);
   }
   return out;
 }
@@ -110,9 +113,12 @@ const MAX_NUDGES = Number.isFinite(args.maxNudges) && args.maxNudges > 0
 export const MAX_TURNS = Number.isFinite(args.maxTurns) && args.maxTurns > 0
   ? Math.floor(args.maxTurns)
   : (Number.isFinite(Number(process.env.SURVEY_MAX_TURNS)) ? Number(process.env.SURVEY_MAX_TURNS) : 10);
-const MODEL = args.model || process.env.SURVEY_MODEL || "stealth/union-alpha";
-const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || "openrouter";
+export const HARNESS = args.harness || process.env.SURVEY_HARNESS || "dsh";
+const PRESET = args.preset || process.env.SURVEY_PRESET || "survey-agent";
+const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? "Ornith-1.5-9B-Q4_K_M" : "stealth/union-alpha");
+const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || (HARNESS === "dsh" ? "unsloth-studio" : "openrouter");
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "low";
+const PATCH_PATH = args.patch || process.env.SURVEY_PATCH_PATH || null;
 // Hard per-turn hang guard: a single codex turn may legitimately run long (the model polls the
 // platform every ~10 min), so this is generous — it only trips on a TRUE hang (no exit at all).
 const TURNS_TIMEOUT_MS = Number(process.env.SURVEY_TURN_TIMEOUT_MS) || 90 * 60 * 1000;
@@ -725,15 +731,29 @@ export function setupCodexStreams({
 function runTurn(argsArr) {
   return new Promise((resolve) => {
     let settled = false;
-    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    const turnStartTime = Date.now();
+    const done = (r) => { if (!settled) { settled = true; resolve({ ...r, durationMs: Date.now() - turnStartTime }); } };
 
     let child;
     let streams = null;
     let liveThreadId = null;
 
     try {
-      // Spawn codex with separated stdout (JSONL) and stderr (text/warnings).
-      child = spawn("codex", argsArr, { cwd: WS, stdio: ["ignore", "pipe", "pipe"] });
+      if (HARNESS === "dsh") {
+        child = spawn("dsh", argsArr, {
+          cwd: WS,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            SPARK_API_KEY: "spark-local",
+            DSH_PERMISSION_MODE: "danger-full-access",
+            SURVEY_PORT: PORT ? String(PORT) : "3013",
+            SURVEY_CDP_URL: PORT ? `http://127.0.0.1:${PORT}` : "http://127.0.0.1:3013",
+          },
+        });
+      } else {
+        child = spawn("codex", argsArr, { cwd: WS, stdio: ["ignore", "pipe", "pipe"] });
+      }
       streams = setupCodexStreams({
         child,
         stdoutPath: AGENT_LOG,
@@ -890,42 +910,89 @@ async function main() {
     }
 
     let argsArr;
-    if (!sessionId) {
-      argsArr = ["exec", ...codexBaseFlags, promptText]; // initial or fresh turn
-    } else {
-      // Bounded nudge budget: fail closed once we've spent all nudges and still have no target.
-      if (state.nudgesUsed >= MAX_NUDGES) {
-        log("warn", "nudge budget exhausted without target -> fail-closed");
-        const idleIssue = findIdleConditionTechIssue();
-        if (idleIssue) {
-          writeIdleTodayMarker();
-          log("info", "writing idle_today marker — no surveys available for this platform today");
-          finishClean(EXIT_IDLE_NO_SURVEYS);
-        } else {
-          writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
-          if (pub) {
-            pub.publish({
-              source: "driver",
-              port: PORT,
-              event: "tech_issue",
-              message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
-            });
+    if (HARNESS === "dsh") {
+      if (turn > 1) {
+        if (state.nudgesUsed >= MAX_NUDGES) {
+          log("warn", "nudge budget exhausted without target -> fail-closed");
+          const idleIssue = findIdleConditionTechIssue();
+          if (idleIssue) {
+            writeIdleTodayMarker();
+            log("info", "writing idle_today marker — no surveys available for this platform today");
+            finishClean(EXIT_IDLE_NO_SURVEYS);
+          } else {
+            writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
+            if (pub) {
+              pub.publish({
+                source: "driver",
+                port: PORT,
+                event: "tech_issue",
+                message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
+              });
+            }
+            finishClean(EXIT_TECH_ISSUE);
           }
-          finishClean(EXIT_TECH_ISSUE);
+          return;
         }
-        return;
+        state.nudgesUsed++;
+        if (pub) {
+          pub.publish({
+            source: "driver",
+            port: PORT,
+            event: "nudge",
+            message: `nudge ${state.nudgesUsed}/${MAX_NUDGES} sent to port ${PORT}`,
+          });
+        }
       }
-      state.nudgesUsed++;
-      if (pub) {
-        pub.publish({
-          source: "driver",
-          port: PORT,
-          event: "nudge",
-          message: `nudge ${state.nudgesUsed}/${MAX_NUDGES} sent to port ${PORT}`,
-        });
+      const patchPath = PATCH_PATH || path.join(WS, "scripts", "survey_agent.patch.yml");
+      const currentPrompt = turn === 1
+        ? promptText
+        : `${promptText}\n\n=== NUDGE (Turn ${turn}/${MAX_TURNS}) ===\n${buildNudgePrompt(PORT)}`;
+      argsArr = [
+        "--profile", "headless",
+        "--patch", patchPath,
+        "--preset", PRESET,
+        "--provider", PROVIDER,
+        "--model", MODEL,
+        currentPrompt
+      ];
+    } else {
+      if (!sessionId) {
+        argsArr = ["exec", ...codexBaseFlags, promptText]; // initial or fresh turn
+      } else {
+        // Bounded nudge budget: fail closed once we've spent all nudges and still have no target.
+        if (state.nudgesUsed >= MAX_NUDGES) {
+          log("warn", "nudge budget exhausted without target -> fail-closed");
+          const idleIssue = findIdleConditionTechIssue();
+          if (idleIssue) {
+            writeIdleTodayMarker();
+            log("info", "writing idle_today marker — no surveys available for this platform today");
+            finishClean(EXIT_IDLE_NO_SURVEYS);
+          } else {
+            writeTechIssue("nudge_budget_exhausted", `still no target_reached after ${MAX_NUDGES} nudges; last turn ended without meeting the completion quota`);
+            if (pub) {
+              pub.publish({
+                source: "driver",
+                port: PORT,
+                event: "tech_issue",
+                message: `nudge budget exhausted (${MAX_NUDGES}/${MAX_NUDGES})`,
+              });
+            }
+            finishClean(EXIT_TECH_ISSUE);
+          }
+          return;
+        }
+        state.nudgesUsed++;
+        if (pub) {
+          pub.publish({
+            source: "driver",
+            port: PORT,
+            event: "nudge",
+            message: `nudge ${state.nudgesUsed}/${MAX_NUDGES} sent to port ${PORT}`,
+          });
+        }
+        const nudgePrompt = buildNudgePrompt(PORT);
+        argsArr = ["exec", "resume", ...codexBaseFlags, sessionId, nudgePrompt];
       }
-      const nudgePrompt = buildNudgePrompt(PORT);
-      argsArr = ["exec", "resume", ...codexBaseFlags, sessionId, nudgePrompt];
     }
 
     log("info", `turn ${turn} starting`, { kind: sessionId ? "resume" : "fresh", nudgesUsed: state.nudgesUsed, maxNudges: MAX_NUDGES, maxTurns: MAX_TURNS });
@@ -958,7 +1025,24 @@ async function main() {
       }
     } catch {}
 
-    log("info", `turn ${turn} ended`, { code: res.code, signal: res.signal ?? null, threadId: res.threadId ?? null });
+    // Fast crash guard: if a turn exited in < 5000ms with non-zero code, fail closed immediately
+    if (res.code !== 0 && (res.durationMs ?? 0) < 5000 && res.signal !== "SIGTERM" && res.signal !== "SIGINT") {
+      log("error", `fast crash detected on turn ${turn}: exited with code ${res.code} in ${res.durationMs}ms`);
+      writeTechIssue("fast_crash", `turn ${turn} failed in ${res.durationMs}ms with code ${res.code}`);
+      if (pub) {
+        pub.publish({
+          source: "driver",
+          port: PORT,
+          event: "fast_crash",
+          message: `fast crash on port ${PORT}: turn ${turn} exited in ${res.durationMs}ms (code ${res.code})`,
+          detail: { turn, durationMs: res.durationMs, code: res.code },
+        });
+      }
+      finishClean(EXIT_TECH_ISSUE);
+      return;
+    }
+
+    log("info", `turn ${turn} ended`, { code: res.code, signal: res.signal ?? null, threadId: res.threadId ?? null, durationMs: res.durationMs });
     if (pub) {
       pub.publish({
         source: "driver",
