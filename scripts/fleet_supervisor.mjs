@@ -31,6 +31,9 @@ import { createAutoFixer } from "./auto_fixer.mjs";
 import { driverKillPattern } from "./driver_kill.mjs";
 import { createEventHub } from "./observability_hub.mjs";
 import { cleanupScreenshots } from "./cleanup_screenshots.mjs";
+import { loadEnvFiles } from "./survey_driver.mjs";
+
+loadEnvFiles();
 
 // Portable root: this file lives in <root>/scripts/, so the repo root is its parent.
 // Override with SURVEY_ROOT if the checkout lives elsewhere.
