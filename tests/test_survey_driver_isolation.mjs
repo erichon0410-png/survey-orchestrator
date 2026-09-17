@@ -56,6 +56,28 @@ const cleanRes = cleanupScreenshots({ olderThanMs: 0 });
 assert.ok(!fs.existsSync(testTmpShot), "cleanupScreenshots must purge temporary shot files");
 assert.ok(cleanRes.filesRemoved >= 1, "cleanupScreenshots must report at least 1 removed file");
 
-console.log("PASS survey_driver port isolation, tab pruning, and cleanup tests passed successfully!");
+// 7. Test loadEnvFiles
+import { loadEnvFiles } from "../scripts/survey_driver.mjs";
+const tmpEnvDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
+const tmpEnvPath = path.join(tmpEnvDir, ".env");
+fs.writeFileSync(tmpEnvPath, `
+# Test Comment
+TEST_OR_KEY="sk-or-test-key-12345"
+TEST_OR_EMPTY=
+TEST_OR_PLAIN=unquoted_value
+`);
+const origCwd = process.cwd();
+try {
+  process.chdir(tmpEnvDir);
+  loadEnvFiles();
+  assert.equal(process.env.TEST_OR_KEY, "sk-or-test-key-12345", "Must load quoted env var");
+  assert.equal(process.env.TEST_OR_PLAIN, "unquoted_value", "Must load unquoted env var");
+  assert.equal(process.env.TEST_OR_EMPTY, undefined, "Must skip empty env var");
+} finally {
+  process.chdir(origCwd);
+  fs.rmSync(tmpEnvDir, { recursive: true, force: true });
+}
+
+console.log("PASS survey_driver port isolation, tab pruning, cleanup, and env loading tests passed successfully!");
 
 

@@ -35,6 +35,7 @@
 // stdlib only (node:fs, node:path, node:child_process). Node >= 18.
 
 import fs from "node:fs";
+import os from "node:os";
 
 // Exit code constants
 export const EXIT_OK = 0;
@@ -48,9 +49,45 @@ import { fileURLToPath } from "node:url";
 import { createEventPublisher } from "./observability_hub.mjs";
 import { normalizeCodexLine } from "./fleet_events.mjs";
 
+export function loadEnvFiles() {
+  const wsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const candidatePaths = [
+    path.join(os.homedir(), ".codex", ".env"),
+    path.join(os.homedir(), ".hermes", ".env"),
+    path.join(os.homedir(), ".env"),
+    path.join(wsRoot, ".env"),
+    path.join(process.cwd(), ".env"),
+  ];
+  for (const envPath of candidatePaths) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, "utf-8");
+        for (const rawLine of content.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith("#")) continue;
+          const eqIdx = line.indexOf("=");
+          if (eqIdx > 0) {
+            const key = line.slice(0, eqIdx).trim();
+            let val = line.slice(eqIdx + 1).trim();
+            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+              val = val.slice(1, -1);
+            }
+            if (key && val && (!process.env[key] || process.env[key].trim() === "")) {
+              process.env[key] = val;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+}
+
+// Load environment variables (.env files) before configuring models / providers
+loadEnvFiles();
+
 // ---------- arg / env parsing ----------
 function parseArgs(argv) {
-  const out = { port: null, marker: "", promptFile: null, maxNudges: null, maxTurns: null, model: null, effort: null };
+  const out = { port: null, marker: "", promptFile: null, maxNudges: null, maxTurns: null, model: null, provider: null, effort: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") out.port = Number(argv[++i]);
@@ -59,6 +96,7 @@ function parseArgs(argv) {
     else if (a === "--max-nudges") out.maxNudges = Number(argv[++i]);
     else if (a === "--max-turns") out.maxTurns = Number(argv[++i]);
     else if (a === "--model") out.model = String(argv[++i]);
+    else if (a === "--provider") out.provider = String(argv[++i]);
     else if (a === "--effort") out.effort = String(argv[++i]);
   }
   return out;
