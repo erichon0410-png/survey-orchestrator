@@ -49,6 +49,8 @@ case "$1" in
     fi
 
     echo ""
+    node scripts/ensure_fleet_navigation.mjs
+    echo ""
     node scripts/probe_all.mjs
     echo ""
     echo "Fleet is ready."

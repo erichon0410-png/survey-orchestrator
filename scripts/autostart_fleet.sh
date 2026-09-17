@@ -25,7 +25,21 @@ for c in SurveyCompleter-gmail-03 SurveyCompleter-gmail-04 SurveyCompleter-gmail
   if docker start "$c" >/dev/null 2>&1; then log "ensured up: $c"; else log "note: could not start $c (stopped/absent)"; fi
 done
 
-# 3) Start the host supervisor (idempotent via pgrep guard in start_supervisor.sh).
+# 3) Wait for CDP endpoints and ensure containers are navigated to their assigned platforms
+log "ensuring containers navigated to their assigned platforms..."
+for _i in {1..30}; do
+  if curl -sf --max-time 1 "http://127.0.0.1:3013/cdp/json/version" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if node scripts/ensure_fleet_navigation.mjs >>"$LOG" 2>&1; then
+  log "containers navigated successfully"
+else
+  log "WARN: ensure_fleet_navigation.mjs returned non-zero"
+fi
+
+# 4) Start the host supervisor (idempotent via pgrep guard in start_supervisor.sh).
 if bash scripts/start_supervisor.sh >>"$LOG" 2>&1; then
   log "supervisor started (or already running)"
 else

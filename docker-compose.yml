@@ -15,6 +15,7 @@ services:
       - TITLE=Gmail 03
       - START_DOCKER=true
       - PIXELFLUX_WAYLAND=true
+      - DEFAULT_URL=https://app.surveyjunkie.com/
     shm_size: '1gb'
     security_opt:
       - seccomp:unconfined
@@ -37,6 +38,7 @@ services:
       - TITLE=Gmail 04
       - START_DOCKER=true
       - PIXELFLUX_WAYLAND=true
+      - DEFAULT_URL=https://www.swagbucks.com/surveys
     shm_size: '1gb'
     security_opt:
       - seccomp:unconfined
@@ -59,6 +61,7 @@ services:
       - TITLE=Gmail 05
       - START_DOCKER=true
       - PIXELFLUX_WAYLAND=true
+      - DEFAULT_URL=https://app.surveyjunkie.com/
     shm_size: '1gb'
     security_opt:
       - seccomp:unconfined
@@ -81,6 +84,7 @@ services:
       - TITLE=Gmail 06
       - START_DOCKER=true
       - PIXELFLUX_WAYLAND=true
+      - DEFAULT_URL=https://app.surveyjunkie.com/
     shm_size: '1gb'
     security_opt:
       - seccomp:unconfined
@@ -103,6 +107,7 @@ services:
       - TITLE=Gmail 07
       - START_DOCKER=true
       - PIXELFLUX_WAYLAND=true
+      - DEFAULT_URL=https://www.swagbucks.com/surveys
     shm_size: '1gb'
     security_opt:
       - seccomp:unconfined

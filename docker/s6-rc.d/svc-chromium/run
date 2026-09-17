@@ -29,9 +29,10 @@ export XDG_RUNTIME_DIR=/config/.XDG
 export WAYLAND_DISPLAY=wayland-0
 export DISPLAY=:1
 
-echo "[svc-chromium] Launching Chromium under user abc (remote-debugging-port=9222)..."
+TARGET_URL="${DEFAULT_URL:-https://app.surveyjunkie.com/}"
+echo "[svc-chromium] Launching Chromium under user abc on ${TARGET_URL} (remote-debugging-port=9222)..."
 exec s6-setuidgid abc /usr/bin/wrapped-chromium \
   --enable-features=UseOzonePlatform \
   --ozone-platform=wayland \
   --remote-debugging-port=9222 \
-  "https://www.swagbucks.com/surveys"
+  "$TARGET_URL"
