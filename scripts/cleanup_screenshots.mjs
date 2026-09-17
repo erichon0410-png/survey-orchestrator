@@ -25,7 +25,7 @@ export function cleanupScreenshots({ olderThanMs = 0 } = {}) {
         const fullPath = path.join(dir, file);
         try {
           const stat = fs.statSync(fullPath);
-          if (stat.isFile() && (now - stat.mtimeMs >= olderThanMs)) {
+          if (stat.isFile() && (olderThanMs === 0 || now - stat.mtimeMs >= olderThanMs)) {
             bytesFreed += stat.size;
             fs.unlinkSync(fullPath);
             filesRemoved++;

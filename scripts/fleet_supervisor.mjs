@@ -450,24 +450,13 @@ export function getAgentStartTime(port, { logsDir = LOGS_DIR } = {}) {
           const entry = JSON.parse(trimmed);
           if (entry.event === "start" || entry.event === "supervisor_resume" || entry.turn === 1) {
             const ms = new Date(entry.ts).getTime();
-            if (!Number.isNaN(ms) && ms > 0) return ms;
+            if (!Number.isNaN(ms) && ms > 0) {
+              agentStartTimes.set(port, ms);
+              return ms;
+            }
           }
         } catch {}
       }
-      // If no explicit start event, look for earliest valid entry timestamp
-      for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trim();
-        if (!trimmed) continue;
-        try {
-          const entry = JSON.parse(trimmed);
-          if (entry.ts) {
-            const ms = new Date(entry.ts).getTime();
-            if (!Number.isNaN(ms) && ms > 0) return ms;
-          }
-        } catch {}
-      }
-      const stat = fs.statSync(statusLog);
-      return stat.ctimeMs || stat.mtimeMs;
     }
   } catch {}
   return 0;
@@ -500,15 +489,22 @@ export function checkIdleTimeouts(psLines, options = {}) {
     if (idleTodayPorts.has(port)) continue;
     if (!isPortAlive(port, psLines)) continue;
 
-    let lastEarningsMs = getLastEarningsTime(port, { logsDir, inboxDir, processedDir });
-
-    if (lastEarningsMs === 0) {
-      // No earnings recorded yet — measure idle time against when agent started
-      const startedMs = getAgentStartTime(port, { logsDir });
-      lastEarningsMs = startedMs > 0 ? startedMs : now;
+    let startedMs = getAgentStartTime(port, { logsDir });
+    if (startedMs === 0) {
+      startedMs = now;
+      agentStartTimes.set(port, now);
     }
 
-    const idleMs = now - lastEarningsMs;
+    // An agent cannot be idle if it hasn't even been running for idleTimeoutMs
+    if (startedMs > 0 && (now - startedMs) < idleTimeoutMs) {
+      continue;
+    }
+
+    let lastEarningsMs = getLastEarningsTime(port, { logsDir, inboxDir, processedDir });
+    // Baseline is the later of last earnings and agent start time
+    const baselineMs = Math.max(lastEarningsMs, startedMs);
+    const idleMs = now - baselineMs;
+
     if (idleMs > idleTimeoutMs) {
       const idleMinutes = Math.round(idleMs / 60000);
       appendSupervisorLog({

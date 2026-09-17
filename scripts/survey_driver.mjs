@@ -803,6 +803,7 @@ async function main() {
   // Capture baseline balance BEFORE starting any turns to enable delta-based
   // target verification. This prevents premature exit on stale/lifetime balances.
   captureBaselineBalance();
+  appendStatus({ event: "start", note: `driver started for port ${PORT}` });
 
   const pub = getPublisher();
   if (pub) {
