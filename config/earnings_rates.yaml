@@ -6,7 +6,7 @@ accounts:
   opinionoutpost:user01@example.com:
     platform: opinionoutpost
     email: user01@example.com
-    ports: [3013]
+    ports: []
     conversion: platform_displayed_usd  # read USD directly from platform; do NOT assume a fixed point rate
     notes: "OpinionOutpost shows a dollar balance directly. Read it as-is."
 
@@ -22,7 +22,7 @@ accounts:
   surveyjunkie:user04@example.com:
     platform: surveyjunkie
     email: user04@example.com
-    ports: [3016]
+    ports: [3013, 3016]
     conversion: points_to_usd
     rate: 0.01  # 100 points = $1.00, so 1 point = $0.01
     unit: points
@@ -37,7 +37,7 @@ accounts:
 
 # Port-to-account lookup (derived from above; kept flat for driver speed)
 port_map:
-  3013: opinionoutpost:user01@example.com
+  3013: surveyjunkie:user04@example.com
   3014: swagbucks:user02@example.com
   3015: eureka:erichong0410@gmail.com
   3016: surveyjunkie:user04@example.com
