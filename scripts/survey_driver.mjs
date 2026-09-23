@@ -115,7 +115,8 @@ export const MAX_TURNS = Number.isFinite(args.maxTurns) && args.maxTurns > 0
   : (Number.isFinite(Number(process.env.SURVEY_MAX_TURNS)) ? Number(process.env.SURVEY_MAX_TURNS) : 10);
 export const HARNESS = args.harness || process.env.SURVEY_HARNESS || "dsh";
 const PRESET = args.preset || process.env.SURVEY_PRESET || "survey-agent";
-const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? "Ornith-1.5-9B-Q4_K_M" : "stealth/union-alpha");
+const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? (process.env.DSH_MODEL || "protoLabsAI/Ornith-1.5-9B-MTP-GGUF") : "stealth/union-alpha");
+// Model fallback reference: Ornith-1.5-9B-Q4_K_M
 const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || (HARNESS === "dsh" ? "unsloth-studio" : "openrouter");
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "low";
 const PATCH_PATH = args.patch || process.env.SURVEY_PATCH_PATH || null;
