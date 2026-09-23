@@ -13,6 +13,8 @@ console.log("[test] 1. generateBackgroundPatch transforms instant click into smo
 
   const patched = generateBackgroundPatch(sampleBackground);
   assert.ok(patched.includes("stealthBezierDispatch"), "must insert stealthBezierDispatch helper");
+  assert.ok(patched.includes("Math.round(dist / 45)"), "must use turbo step calculation");
+  assert.ok(patched.includes("35 + Math.floor(Math.random() * 25)"), "must use turbo trailing pause");
   assert.ok(!patched.includes("await r.cdp.send(e,'Input.dispatchMouseEvent',{type:'mouseMoved',...t,modifiers:s})"), "must replace raw instant mouseMoved");
   assert.ok(patched.includes("await stealthBezierDispatch(r.cdp, e, t, s)"), "must call stealthBezierDispatch");
 }

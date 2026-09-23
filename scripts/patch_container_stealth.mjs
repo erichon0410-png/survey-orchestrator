@@ -32,7 +32,7 @@ export function generateBackgroundPatch(src) {
       const dx = p1.x - p0.x;
       const dy = p1.y - p0.y;
       const dist = Math.hypot(dx, dy);
-      const steps = Math.max(20, Math.min(38, Math.round(dist / 20)));
+      const steps = Math.max(8, Math.min(14, Math.round(dist / 45)));
 
       for (let i = 1; i <= steps; i++) {
         const s = i / steps;
@@ -42,10 +42,10 @@ export function generateBackgroundPatch(src) {
         const curX = Math.round(p0.x + dx * t + jx);
         const curY = Math.round(p0.y + dy * t + jy);
         await cdp.send(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: curX, y: curY, modifiers }).catch(() => {});
-        await new Promise(r => setTimeout(r, 9 + Math.floor(Math.random() * 8)));
+        await new Promise(r => setTimeout(r, 6 + Math.floor(Math.random() * 4)));
       }
       __lastMouse = { x: p1.x, y: p1.y };
-      await new Promise(r => setTimeout(r, 120 + Math.floor(Math.random() * 120)));
+      await new Promise(r => setTimeout(r, 35 + Math.floor(Math.random() * 25)));
     }
   `;
 
@@ -70,10 +70,10 @@ export function patchContainer(containerName) {
   const bgPath = "/usr/share/chromium/extensions/browser-skill/background.js";
   const orig = execSync(`docker exec ${containerName} cat ${bgPath}`, { encoding: "utf-8" });
 
-  if (orig.includes("stealthEnsureCursor")) {
-    console.log(`[patch] ${containerName} background.js already has stealthEnsureCursor.`);
+  const patched = generateBackgroundPatch(orig);
+  if (orig === patched) {
+    console.log(`[patch] ${containerName} background.js is already up-to-date.`);
   } else {
-    const patched = generateBackgroundPatch(orig);
     const tmpFile = path.join(os.tmpdir(), `bg_patched_${containerName}_${Date.now()}.js`);
     fs.writeFileSync(tmpFile, patched, "utf-8");
     execSync(`docker cp ${tmpFile} ${containerName}:${bgPath}`);
