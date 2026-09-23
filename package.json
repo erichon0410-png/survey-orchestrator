@@ -7,7 +7,7 @@
     "fleet:stop": "node scripts/stop_fleet.mjs",
     "fleet:status": "node scripts/fleet_status.mjs",
     "fleet:clean-shots": "node scripts/cleanup_screenshots.mjs",
-    "test": "node tests/test_clean_exit_and_quota_guards.mjs && node tests/test_hermes_digest.mjs && node tests/test_hermes_reporter.mjs && node tests/test_survey_fleet_skill.mjs && node tests/test_survey_driver_isolation.mjs && node tests/test_mouse_helper.mjs && node tests/test_cdp_control_click.mjs && node tests/test_prompt_mouse_rules.mjs && node tests/test_survey_driver_dsh.mjs && node tests/test_fast_crash_guard.mjs"
+    "test": "node tests/test_clean_exit_and_quota_guards.mjs && node tests/test_hermes_digest.mjs && node tests/test_hermes_reporter.mjs && node tests/test_survey_fleet_skill.mjs && node tests/test_survey_driver_isolation.mjs && node tests/test_mouse_helper.mjs && node tests/test_cdp_control_click.mjs && node tests/test_prompt_mouse_rules.mjs && node tests/test_survey_driver_dsh.mjs && node tests/test_fast_crash_guard.mjs && node tests/test_stealth_mouse.mjs && node tests/test_stealth_mouse_cdp.mjs && node tests/test_container_stealth_patch.mjs"
   },
   "dependencies": {
     "@playwright/test": "^1.63.0",
