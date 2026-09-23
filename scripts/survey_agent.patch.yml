@@ -11,22 +11,42 @@
             name: Ornith-1.5-9B
             contextWindow: 122880
             maxTokens: 8192
-            reasoningEfforts: false # reasoningEfforts: off (disables thinking for fast tool generation)
+            reasoningEfforts: # reasoningEfforts: off
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
           - id: Ornith-1.5-9B-Q4_K_M
             name: Ornith-1.5-9B
             contextWindow: 122880
             maxTokens: 8192
-            reasoningEfforts: false # reasoningEfforts: off (disables thinking for fast tool generation)
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
           - id: ornith-1.5-9b
             name: Ornith-1.5-9B
             contextWindow: 122880
             maxTokens: 8192
-            reasoningEfforts: false # reasoningEfforts: off (disables thinking for fast tool generation)
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
           - id: davidau-9b
             name: davidau-9b
             contextWindow: 122880
             maxTokens: 8192
-            reasoningEfforts: false # reasoningEfforts: off (disables thinking for fast tool generation)
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
       llama-cpp:
         displayName: llama.cpp local
         apiKey: local

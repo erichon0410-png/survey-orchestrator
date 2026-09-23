@@ -118,7 +118,7 @@ const PRESET = args.preset || process.env.SURVEY_PRESET || "survey-agent";
 const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? (process.env.DSH_MODEL || "protoLabsAI/Ornith-1.5-9B-MTP-GGUF") : "stealth/union-alpha");
 // Model fallback reference: Ornith-1.5-9B-Q4_K_M
 const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || (HARNESS === "dsh" ? "unsloth-studio" : "openrouter");
-const EFFORT = args.effort || process.env.SURVEY_EFFORT || "low";
+const EFFORT = args.effort || process.env.SURVEY_EFFORT || "off";
 const PATCH_PATH = args.patch || process.env.SURVEY_PATCH_PATH || null;
 // Hard per-turn hang guard: a single codex turn may legitimately run long (the model polls the
 // platform every ~10 min), so this is generous — it only trips on a TRUE hang (no exit at all).
@@ -1032,6 +1032,7 @@ async function main() {
         "--preset", PRESET,
         "--provider", PROVIDER,
         "--model", MODEL,
+        ...(EFFORT ? ["--reasoning-effort", EFFORT] : []),
         currentPrompt
       ];
     } else {
