@@ -51,9 +51,9 @@ export function generateBezierTrajectory(p0, p1, options = {}) {
   const dy = p1.y - p0.y;
   const distance = Math.hypot(dx, dy);
 
-  const minSteps = options.minSteps ?? 25;
-  const maxSteps = options.maxSteps ?? 45;
-  const totalSteps = Math.max(minSteps, Math.min(maxSteps, Math.round(distance / 18)));
+  const minSteps = options.minSteps ?? 8;
+  const maxSteps = options.maxSteps ?? 14;
+  const totalSteps = Math.max(minSteps, Math.min(maxSteps, Math.round(distance / 45)));
 
   // Generate randomized control points orthogonal to the direct line
   const normalAngle = Math.atan2(dy, dx) + (Math.random() > 0.5 ? 1 : -1) * (Math.PI / 2);
@@ -84,7 +84,7 @@ export function generateBezierTrajectory(p0, p1, options = {}) {
     const jitterX = (Math.random() - 0.5) * 1.2;
     const jitterY = (Math.random() - 0.5) * 1.2;
 
-    const delayMs = Math.round(8 + Math.random() * 8 + (1 - Math.sin(s * Math.PI)) * 6);
+    const delayMs = Math.round(6 + Math.random() * 4);
 
     points.push({
       x: Math.round(pt.x + jitterX),
@@ -97,7 +97,7 @@ export function generateBezierTrajectory(p0, p1, options = {}) {
   points.push({
     x: Math.round(p1.x),
     y: Math.round(p1.y),
-    delayMs: Math.round(12 + Math.random() * 8),
+    delayMs: Math.round(6 + Math.random() * 4),
   });
 
   return points;
@@ -257,7 +257,7 @@ export async function stealthClick(send, target, options = {}) {
   await stealthMove(send, destPt, options);
 
   // 2. Pre-click hover dwell
-  const dwellMs = options.dwellMs ?? (150 + Math.floor(Math.random() * 200));
+  const dwellMs = options.dwellMs ?? (35 + Math.floor(Math.random() * 30));
   if (dwellMs > 0) {
     await new Promise(r => setTimeout(r, dwellMs));
   }
@@ -271,8 +271,8 @@ export async function stealthClick(send, target, options = {}) {
     clickCount: options.clickCount || 1,
   });
 
-  // 4. Button hold duration (60-110ms)
-  const holdMs = options.holdMs ?? (60 + Math.floor(Math.random() * 50));
+  // 4. Button hold duration (30-45ms)
+  const holdMs = options.holdMs ?? (30 + Math.floor(Math.random() * 15));
   if (holdMs > 0) {
     await new Promise(r => setTimeout(r, holdMs));
   }
@@ -286,8 +286,8 @@ export async function stealthClick(send, target, options = {}) {
     clickCount: options.clickCount || 1,
   });
 
-  // 6. Post-click settle
-  const settleMs = options.settleMs ?? (100 + Math.floor(Math.random() * 100));
+  // 6. Post-click settle (25-40ms)
+  const settleMs = options.settleMs ?? (25 + Math.floor(Math.random() * 15));
   if (settleMs > 0) {
     await new Promise(r => setTimeout(r, settleMs));
   }

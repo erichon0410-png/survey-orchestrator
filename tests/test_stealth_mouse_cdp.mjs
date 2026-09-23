@@ -39,13 +39,13 @@ console.log("[test] 2. stealthMove traverses waypoints and emits mouseMoved even
   const endPos = await stealthMove(fakeSend, { x: 300, y: 250 }, {
     lastPos: { x: 100, y: 100 },
     stepDelayMs: 1,
-    minSteps: 25,
-    maxSteps: 30,
+    minSteps: 8,
+    maxSteps: 14,
   });
 
   assert.equal(endPos.x, 300);
   assert.equal(endPos.y, 250);
-  assert.ok(events.length >= 25, `expected at least 25 moves, got ${events.length}`);
+  assert.ok(events.length >= 8 && events.length <= 14, `expected 8-14 moves, got ${events.length}`);
   assert.ok(events.every(e => e.type === "mouseMoved"), "all events must be mouseMoved");
   assert.equal(events[events.length - 1].x, 300);
   assert.equal(events[events.length - 1].y, 250);
@@ -91,7 +91,7 @@ console.log("[test] 3. stealthClick executes trajectory, dwell, press, hold, and
 
   // Verify mouseMoved trajectory events
   const moveEvents = events.filter(e => e.type === "mouseMoved");
-  assert.ok(moveEvents.length >= 25, `expected >= 25 trajectory steps, got ${moveEvents.length}`);
+  assert.ok(moveEvents.length >= 8 && moveEvents.length <= 14, `expected 8-14 trajectory steps, got ${moveEvents.length}`);
 
   // Verify press and release events
   const pressEvent = events.find(e => e.type === "mousePressed");

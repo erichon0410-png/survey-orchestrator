@@ -5,10 +5,13 @@ console.log("[test] 1. generateBezierTrajectory generates realistic curve waypoi
 {
   const p0 = { x: 100, y: 100 };
   const p1 = { x: 800, y: 600 };
-  const trajectory = generateBezierTrajectory(p0, p1, { minSteps: 25, maxSteps: 45 });
+  const trajectory = generateBezierTrajectory(p0, p1, { minSteps: 8, maxSteps: 14 });
 
   assert.ok(Array.isArray(trajectory), "trajectory must be an array");
-  assert.ok(trajectory.length >= 25 && trajectory.length <= 45, `step count ${trajectory.length} out of bounds [25, 45]`);
+  assert.ok(trajectory.length >= 8 && trajectory.length <= 14, `step count ${trajectory.length} out of bounds [8, 14]`);
+
+  const defaultTrajectory = generateBezierTrajectory(p0, p1);
+  assert.ok(defaultTrajectory.length >= 8 && defaultTrajectory.length <= 14, `default step count ${defaultTrajectory.length} out of bounds [8, 14]`);
 
   // Start and end points
   assert.equal(trajectory[0].x, 100);
