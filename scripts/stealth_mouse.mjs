@@ -171,3 +171,127 @@ export function getVirtualCursorScript() {
     }
   })();`;
 }
+
+export let currentCursorPos = { x: 100, y: 100 };
+
+/**
+ * Injects the #codex-virtual-cursor overlay and webdriver overrides into the page.
+ */
+export async function injectVirtualCursor(send) {
+  const script = getVirtualCursorScript();
+  const stealthOverride = `
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  `;
+  const fullScript = `${stealthOverride}\n${script}`;
+
+  try {
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: fullScript });
+  } catch {}
+
+  try {
+    await send("Runtime.evaluate", { expression: fullScript, returnByValue: false });
+  } catch {}
+}
+
+/**
+ * Moves cursor smoothly along a Bézier trajectory to target {x, y}.
+ */
+export async function stealthMove(send, targetPos, options = {}) {
+  const startPos = options.lastPos || currentCursorPos;
+  const trajectory = generateBezierTrajectory(startPos, targetPos, options);
+
+  for (let i = 0; i < trajectory.length; i++) {
+    const pt = trajectory[i];
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: pt.x,
+      y: pt.y,
+    });
+    const delay = options.stepDelayMs !== undefined ? options.stepDelayMs : pt.delayMs;
+    if (delay > 0) {
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  currentCursorPos = { x: targetPos.x, y: targetPos.y };
+  return currentCursorPos;
+}
+
+/**
+ * Executes a full human-like click with Bézier trajectory, hover dwell, hold, and settle.
+ */
+export async function stealthClick(send, target, options = {}) {
+  let targetBox;
+
+  if (typeof target === "string") {
+    const res = await send("Runtime.evaluate", {
+      expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(target)});
+        if (!el) return null;
+        el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        return { x: r.left, y: r.top, w: r.width, h: r.height, tag: el.tagName, text: el.innerText ? el.innerText.slice(0, 50) : "" };
+      })()`,
+      returnByValue: true,
+    });
+
+    const info = res?.result?.value;
+    if (!info) throw new Error(`Element not found for selector: ${target}`);
+    if (info.w === 0 && info.h === 0) throw new Error(`Element has 0 dimensions: ${target}`);
+    targetBox = info;
+  } else if (target && typeof target.x === "number" && typeof target.y === "number") {
+    targetBox = {
+      x: target.x,
+      y: target.y,
+      w: typeof target.w === "number" ? target.w : 0,
+      h: typeof target.h === "number" ? target.h : 0,
+    };
+  } else {
+    throw new Error("Invalid target: must be a selector string or {x, y} coordinate object");
+  }
+
+  const destPt = calculateJitter(targetBox, options.jitterFactor ?? 0.4);
+
+  // 1. Move along Bézier trajectory
+  await stealthMove(send, destPt, options);
+
+  // 2. Pre-click hover dwell
+  const dwellMs = options.dwellMs ?? (150 + Math.floor(Math.random() * 200));
+  if (dwellMs > 0) {
+    await new Promise(r => setTimeout(r, dwellMs));
+  }
+
+  // 3. Mouse press (down)
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: destPt.x,
+    y: destPt.y,
+    button: options.button || "left",
+    clickCount: options.clickCount || 1,
+  });
+
+  // 4. Button hold duration (60-110ms)
+  const holdMs = options.holdMs ?? (60 + Math.floor(Math.random() * 50));
+  if (holdMs > 0) {
+    await new Promise(r => setTimeout(r, holdMs));
+  }
+
+  // 5. Mouse release (up)
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: destPt.x,
+    y: destPt.y,
+    button: options.button || "left",
+    clickCount: options.clickCount || 1,
+  });
+
+  // 6. Post-click settle
+  const settleMs = options.settleMs ?? (100 + Math.floor(Math.random() * 100));
+  if (settleMs > 0) {
+    await new Promise(r => setTimeout(r, settleMs));
+  }
+
+  return { ok: true, x: destPt.x, y: destPt.y };
+}
+
