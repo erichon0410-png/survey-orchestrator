@@ -25,7 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { selectPageTarget } from "./cdp_readonly.mjs";
-import { dispatchMouseClick } from "./mouse_helper.mjs";
+import { stealthClick, injectVirtualCursor } from "./stealth_mouse.mjs";
 
 let WebSocket;
 try {
@@ -167,7 +167,8 @@ try {
       } else {
         targetSpec = selector;
       }
-      const clickRes = await dispatchMouseClick(send, targetSpec);
+      await injectVirtualCursor(send);
+      const clickRes = await stealthClick(send, targetSpec);
       result = { ok: true, url: target.url, ...clickRes };
     } else {
       const r = await send("Page.captureScreenshot", { format: "png" });

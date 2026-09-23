@@ -123,6 +123,7 @@
       - Views: Supports data-center oversight, company-paid utilities, abortion legal in most cases, Bible inspired but not literal, not particularly religious, no firearms at home, strongly against spanking, no neurological conditions.
 
       === NATIVE BROWSER DRIVING PROTOCOL (BrowserSkill) ===
+      Stealth Visible Cursor Active: All mouse interactions automatically glide an in-page visual cursor (`#codex-virtual-cursor`) along human Bézier trajectories with realistic hover dwell (150–350ms) and hold delays. Never attempt to bypass native clicks.
       Start via browser_session({ action: "start", browser: "<BROWSER_INSTANCE_ID>" }), keep its returned session id, then use browser_inspect and browser_interact with that id and fresh refs. For Canvas or visual coordinates, screenshot first to get captureId and use imageX/imageY from original PNG pixels:
       1. Inspect current page: Call `browser_inspect({ action: "snapshot" })` to get the page elements with refs (@e1, @e2, @e3...).
       2. Start or select: If on dashboard, call `browser_interact({ action: "click", target: "@eN" })` on a "Start Survey" button or survey card.
