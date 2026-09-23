@@ -813,6 +813,7 @@ function runTurn(argsArr) {
             ...process.env,
             SPARK_API_KEY: "spark-local",
             UNSLOTH_STUDIO_API_KEY: process.env.UNSLOTH_STUDIO_API_KEY || "sk-unsloth-3806b3388ca2c8f925f8a2a7aeb78445",
+            UNSLOTH_STUDIO_BASE_URL: process.env.UNSLOTH_STUDIO_BASE_URL || "http://tank.tail576f3e.ts.net:8888/v1",
             DSH_PERMISSION_MODE: "danger-full-access",
             SURVEY_PORT: PORT ? String(PORT) : "3013",
             SURVEY_CDP_URL: PORT ? `http://127.0.0.1:${PORT}` : "http://127.0.0.1:3013",

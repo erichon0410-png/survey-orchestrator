@@ -5,8 +5,18 @@
         displayName: unsloth-studio
         apiKeyEnv: UNSLOTH_STUDIO_API_KEY
         api: openai-completions
-        baseURL: !!js (process.env.UNSLOTH_STUDIO_BASE_URL || 'http://tank.tail576f3e.ts.net:8080/v1')
+        baseURL: !!js (process.env.UNSLOTH_STUDIO_BASE_URL || 'http://tank.tail576f3e.ts.net:8888/v1')
         models:
+          - id: protoLabsAI/Ornith-1.5-9B-MTP-GGUF
+            name: Ornith-1.5-9B
+            contextWindow: 122880
+            maxTokens: 8192
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
           - id: Ornith-1.5-9B-Q4_K_M
             name: Ornith-1.5-9B
             contextWindow: 122880
