@@ -17,7 +17,7 @@ try {
   WebSocket = (await import(path.join(os.homedir(), ".dsh", "profiles", "web", "node_modules", "ws", "index.js"))).default;
 }
 
-const PORT = 3013;
+const PORT = Number(process.env.PORT) || 3013;
 console.log(`[test] Connecting to container on port ${PORT}...`);
 
 let list;

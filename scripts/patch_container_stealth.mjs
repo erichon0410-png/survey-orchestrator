@@ -5,12 +5,28 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { getVirtualCursorScript } from "./stealth_mouse.mjs";
 
 export function generateBackgroundPatch(src) {
+  const cursorScript = getVirtualCursorScript();
   const helperCode = `
     /* === STEALTH BEZIER CURSOR INJECTION === */
+    const __virtualCursorSnippet = ${JSON.stringify(cursorScript)};
+    const __injectedTabs = new Set();
     let __lastMouse = { x: 100, y: 100 };
+
+    async function stealthEnsureCursor(cdp, tabId) {
+      try {
+        if (!__injectedTabs.has(tabId)) {
+          __injectedTabs.add(tabId);
+          await cdp.send(tabId, 'Page.addScriptToEvaluateOnNewDocument', { source: __virtualCursorSnippet }).catch(() => {});
+        }
+        await cdp.send(tabId, 'Runtime.evaluate', { expression: __virtualCursorSnippet }).catch(() => {});
+      } catch (_) {}
+    }
+
     async function stealthBezierDispatch(cdp, tabId, targetCoords, modifiers) {
+      await stealthEnsureCursor(cdp, tabId);
       const p0 = __lastMouse;
       const p1 = { x: targetCoords.x, y: targetCoords.y };
       const dx = p1.x - p0.x;
@@ -33,13 +49,16 @@ export function generateBackgroundPatch(src) {
     }
   `;
 
-  // Replace the instant mouseMoved with stealthBezierDispatch
   let patched = src;
-  if (!patched.includes("stealthBezierDispatch")) {
-    patched = helperCode + "\n" + patched;
+  // If previously patched with an older version, strip old header
+  const oldHeaderRegex = /\/\* === STEALTH BEZIER CURSOR INJECTION === \*\/[\s\S]*?async function stealthBezierDispatch\([^)]*\)\s*\{[\s\S]*?\n\s*\}\n/;
+  if (oldHeaderRegex.test(patched)) {
+    patched = patched.replace(oldHeaderRegex, "");
   }
 
-  // Replace instant move call
+  patched = helperCode + "\n" + patched;
+
+  // Replace instant move call in wg (click)
   const targetPattern = /await r\.cdp\.send\(e,\s*['"`]Input\.dispatchMouseEvent['"`],\s*\{type:\s*['"`]mouseMoved['"`],\s*\.\.\.t,\s*modifiers:\s*s\}\)/g;
   patched = patched.replace(targetPattern, "await stealthBezierDispatch(r.cdp, e, t, s)");
 
@@ -51,8 +70,8 @@ export function patchContainer(containerName) {
   const bgPath = "/usr/share/chromium/extensions/browser-skill/background.js";
   const orig = execSync(`docker exec ${containerName} cat ${bgPath}`, { encoding: "utf-8" });
 
-  if (orig.includes("stealthBezierDispatch")) {
-    console.log(`[patch] ${containerName} background.js already patched.`);
+  if (orig.includes("stealthEnsureCursor")) {
+    console.log(`[patch] ${containerName} background.js already has stealthEnsureCursor.`);
   } else {
     const patched = generateBackgroundPatch(orig);
     const tmpFile = path.join(os.tmpdir(), `bg_patched_${containerName}_${Date.now()}.js`);
