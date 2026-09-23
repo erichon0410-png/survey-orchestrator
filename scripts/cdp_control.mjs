@@ -46,12 +46,12 @@ const match = opt("--match");
 const js = opt("--js");
 const selector = opt("--selector");
 const coords = opt("--coords");
-const outPath = opt("-o");
 const timeoutMs = 15_000;
 // positional args (flags and their values excluded)
 const FLAG_VALS = new Set(["--host", "--match", "--js", "--selector", "--coords", "-o"]);
 const posArgs = [];
 for (let i = 0; i < rest.length; i++) { if (FLAG_VALS.has(rest[i])) i++; else posArgs.push(rest[i]); }
+const outPath = opt("-o") || (cmd === "screenshot" ? posArgs[0] : undefined);
 
 if (cmd === "click" && !selector && !coords) {
   console.error(JSON.stringify({ ok: false, error: "missing --selector or --coords" }));
@@ -181,3 +181,4 @@ try {
   process.exit(1);
 }
 console.log(JSON.stringify(result));
+process.exit(0);
