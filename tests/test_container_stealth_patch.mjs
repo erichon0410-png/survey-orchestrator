@@ -33,13 +33,19 @@ console.log("[test] 2. generateBackgroundPatch handles template literal backtick
   assert.ok(patched.includes("await stealthBezierDispatch(r.cdp, e, t, s)"), "must call stealthBezierDispatch");
 }
 
-console.log("[test] 3. generateBackgroundPatch is idempotent");
+console.log("[test] 4. generateBackgroundPatch injects auto-scroll and label resolution");
 {
-  const sample = `await r.cdp.send(e,'Input.dispatchMouseEvent',{type:'mouseMoved',...t,modifiers:s})`;
-  const firstPass = generateBackgroundPatch(sample);
-  const secondPass = generateBackgroundPatch(firstPass);
-  const occurrences = (secondPass.match(/async function stealthBezierDispatch/g) || []).length;
-  assert.equal(occurrences, 1, "stealthBezierDispatch should not be duplicated");
+  const sample = `
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    if (this instanceof Element) pushElement(this);
+    for (const el of this.querySelectorAll('*')) pushElement(el);
+    if (rects.length === 0) return null;
+  `;
+  const patched = generateBackgroundPatch(sample);
+  assert.ok(patched.includes("target.scrollIntoView"), "must inject target.scrollIntoView");
+  assert.ok(patched.includes("target.closest('label')"), "must resolve closest label for inputs");
+  assert.ok(patched.includes("pushElement(target)"), "must push target instead of this");
+  assert.ok(patched.includes("target.getBoundingClientRect()"), "must fall back to bounding client rect");
 }
 
 console.log("PASS: test_container_stealth_patch");

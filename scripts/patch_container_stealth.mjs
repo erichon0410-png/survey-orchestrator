@@ -62,6 +62,31 @@ export function generateBackgroundPatch(src) {
   const targetPattern = /await r\.cdp\.send\(e,\s*['"`]Input\.dispatchMouseEvent['"`],\s*\{type:\s*['"`]mouseMoved['"`],\s*\.\.\.t,\s*modifiers:\s*s\}\)/g;
   patched = patched.replace(targetPattern, "await stealthBezierDispatch(r.cdp, e, t, s)");
 
+  // Patch Mc descendant bounds to auto-scroll target into view and resolve input labels
+  const origDescendantSnippet = `const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;`;
+  const enhancedDescendantSnippet = `let target = this;
+        if (target instanceof Element) {
+          if (target.tagName === 'INPUT' && (target.type === 'checkbox' || target.type === 'radio')) {
+            const lbl = target.closest('label') || (target.id ? document.querySelector('label[for="' + target.id + '"]') : null);
+            if (lbl) target = lbl;
+          }
+          try { target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (_) {}
+        }
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;`;
+
+  if (patched.includes(origDescendantSnippet) && !patched.includes("target.scrollIntoView")) {
+    patched = patched.replace(origDescendantSnippet, enhancedDescendantSnippet);
+    patched = patched.replace("if (this instanceof Element) pushElement(this);", "if (target instanceof Element) pushElement(target);");
+    patched = patched.replace("for (const el of this.querySelectorAll('*')) pushElement(el);", "for (const el of target.querySelectorAll('*')) pushElement(el);");
+    patched = patched.replace("if (rects.length === 0) return null;", `if (rects.length === 0) {
+          if (target instanceof Element) {
+            const b = target.getBoundingClientRect();
+            if (b && b.width > 0 && b.height > 0) return { x: b.left, y: b.top, width: b.width, height: b.height };
+          }
+          return null;
+        }`);
+  }
+
   return patched;
 }
 
