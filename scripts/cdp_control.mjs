@@ -25,7 +25,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { selectPageTarget } from "./cdp_readonly.mjs";
-import { dispatchMouseClick } from "./mouse_helper.mjs";
+import { stealthClick, injectVirtualCursor } from "./stealth_mouse.mjs";
 
 let WebSocket;
 try {
@@ -46,12 +46,12 @@ const match = opt("--match");
 const js = opt("--js");
 const selector = opt("--selector");
 const coords = opt("--coords");
-const outPath = opt("-o");
 const timeoutMs = 15_000;
 // positional args (flags and their values excluded)
 const FLAG_VALS = new Set(["--host", "--match", "--js", "--selector", "--coords", "-o"]);
 const posArgs = [];
 for (let i = 0; i < rest.length; i++) { if (FLAG_VALS.has(rest[i])) i++; else posArgs.push(rest[i]); }
+const outPath = opt("-o") || (cmd === "screenshot" ? posArgs[0] : undefined);
 
 if (cmd === "click" && !selector && !coords) {
   console.error(JSON.stringify({ ok: false, error: "missing --selector or --coords" }));
@@ -167,10 +167,13 @@ try {
       } else {
         targetSpec = selector;
       }
-      const clickRes = await dispatchMouseClick(send, targetSpec);
+      await injectVirtualCursor(send);
+      const clickRes = await stealthClick(send, targetSpec);
       result = { ok: true, url: target.url, ...clickRes };
     } else {
-      const r = await send("Page.captureScreenshot", { format: "png" });
+      try { await send("Page.enable"); } catch {}
+      try { await send("Page.bringToFront"); } catch {}
+      const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       if (outPath) { fs.writeFileSync(outPath, Buffer.from(String(r.data || ""), "base64")); result = { ok: true, url: target.url, path: outPath }; }
       else result = { ok: true, url: target.url, screenshot_b64: r.data };
     }
@@ -180,3 +183,4 @@ try {
   process.exit(1);
 }
 console.log(JSON.stringify(result));
+process.exit(0);

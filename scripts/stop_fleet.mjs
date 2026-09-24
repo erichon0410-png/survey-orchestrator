@@ -46,7 +46,7 @@ function getFleetProcesses() {
   return matches;
 }
 
-export async function stopFleet({ timeoutMs = 4000 } = {}) {
+export async function stopFleet({ timeoutMs = 1200 } = {}) {
   console.log("🛑 Initiating survey fleet shutdown...");
 
   let active = getFleetProcesses();
@@ -113,3 +113,4 @@ if (isDirectRun || process.argv[1]?.includes("stop_fleet.mjs")) {
       process.exit(1);
     });
 }
+

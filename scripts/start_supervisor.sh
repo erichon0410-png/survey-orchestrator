@@ -15,7 +15,11 @@ if [ -n "$SUPERVISOR_PID" ]; then
 fi
 
 mkdir -p logs
+if ! pgrep -f "bsk_relay\.mjs" >/dev/null 2>&1; then
+  setsid node scripts/bsk_relay.mjs >> logs/bsk_relay.log 2>&1 < /dev/null &
+fi
 setsid node scripts/fleet_supervisor.mjs >> logs/supervisor.stdout 2>> logs/supervisor.stderr < /dev/null &
 PID=$!
 disown "$PID" 2>/dev/null || true
 echo "Supervisor successfully started in background with PID $PID"
+
