@@ -383,7 +383,7 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
       return true;
     }
     // Check text/value
-    return /^(next|continue|submit|proceed|forward|done|start survey)/i.test(val) || /^Next|^Continue/i.test(val);
+    return /^(next|continue|submit|proceed|forward|done|start|begin)/i.test(val) || /^Next|^Continue|^Start/i.test(val);
   }) || document.querySelector('#submit-btn, [data-btn="submit-btn"], #btn_continue, button.btn-w-icon, .next-button, .btn-next');
 
   let nextClicked = false;
