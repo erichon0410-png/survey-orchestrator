@@ -113,6 +113,17 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     } catch (e) {}
   };
 
+  // Helper to ensure checkbox/radio is checked without double-toggle
+  const ensureChecked = (el) => {
+    if (!el) return;
+    if (!el.checked) clickElement(el);
+    if (!el.checked) {
+      el.checked = true;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+
   // 2. Radio Groups (matrix and standalone)
   const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
   let answeredRadios = 0;
@@ -233,20 +244,18 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
   }
 
   // 3. Checkboxes (multi-select and per-row matrices)
-  const rows = Array.from(document.querySelectorAll('tr, div[class*="row"], div[class*="grid"], div[role="row"]'));
+  const matrixRows = Array.from(document.querySelectorAll('tbody tr, table tr, [role="row"]')).filter(r => r.querySelectorAll('input[type="checkbox"]').length > 0);
   let answeredCheckboxes = 0;
-  if (rows.length > 0) {
-    rows.forEach(row => {
+  if (matrixRows.length > 0) {
+    matrixRows.forEach(row => {
       const cbs = Array.from(row.querySelectorAll('input[type="checkbox"]'));
       if (cbs.length > 0 && !cbs.some(c => c.checked)) {
         const rowText = (row.innerText || '').toLowerCase();
         let pick = cbs[0];
         if (/work for|employed in|industry|immediate family/i.test(rowText)) {
-          pick = cbs.find(c => /none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value)) || cbs[0];
+          pick = cbs.find(c => /none/i.test((c.closest('label') || document.querySelector('label[for="' + c.id + '"]') || c.parentElement)?.innerText || c.value)) || cbs[0];
         }
-        pick.checked = true;
-        clickElement(pick);
-        pick.dispatchEvent(new Event('change', { bubbles: true }));
+        ensureChecked(pick);
         answeredCheckboxes++;
       }
     });
@@ -259,33 +268,24 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
   );
   consentCbs.forEach(c => {
     if (!c.checked) {
-      clickElement(c);
-      c.checked = true;
-      c.dispatchEvent(new Event('input', { bubbles: true }));
-      c.dispatchEvent(new Event('change', { bubbles: true }));
+      ensureChecked(c);
       answeredCheckboxes++;
     }
   });
 
-  if (answeredCheckboxes === 0 && checkboxes.length > 0 && !checkboxes.some(c => c.checked)) {
+  if (checkboxes.length > 0 && !checkboxes.some(c => c.checked)) {
     const isExclusionQuestion = /work for|employed in|industry|immediate family/i.test(text.toLowerCase());
     if (isExclusionQuestion) {
-      const noneCb = checkboxes.find(c => /none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value));
+      const noneCb = checkboxes.find(c => /none/i.test((c.closest('label') || document.querySelector('label[for="' + c.id + '"]') || c.parentElement)?.innerText || c.value));
       if (noneCb) {
-        clickElement(noneCb);
-        noneCb.checked = true;
-        noneCb.dispatchEvent(new Event('input', { bubbles: true }));
-        noneCb.dispatchEvent(new Event('change', { bubbles: true }));
+        ensureChecked(noneCb);
         answeredCheckboxes++;
       }
     } else {
-      const valid = checkboxes.filter(cb => !/none of the above|prefer not|don't know/i.test((cb.closest('label') || cb.parentElement)?.innerText || cb.value));
+      const valid = checkboxes.filter(cb => !/none of the above|prefer not|don't know/i.test((cb.closest('label') || document.querySelector('label[for="' + cb.id + '"]') || cb.parentElement)?.innerText || cb.value));
       const toCheck = valid.slice(0, Math.min(3, valid.length));
       toCheck.forEach(cb => {
-        clickElement(cb);
-        cb.checked = true;
-        cb.dispatchEvent(new Event('input', { bubbles: true }));
-        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        ensureChecked(cb);
         answeredCheckboxes++;
       });
     }
