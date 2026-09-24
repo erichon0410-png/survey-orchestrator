@@ -3,12 +3,11 @@
 // Continuously supervises and drives ports 3013 (SurveyJunkie) and 3014 (Swagbucks)
 // for 3 hours. Guarantees forward momentum by:
 // 1. Reading live balance and tracking exact earnings deltas in real-time.
-// 2. Dynamically identifying and connecting to newly spawned survey tabs (target="_blank").
-// 3. Dismissing blocking promo overlays and auto-clicking "Start Survey" / "Try This Survey" modals.
-// 4. Answering prescreener and partner survey questions (Alchemer, LifePoints, Qualtrics, Decipher, BitLabs)
-//    with the standard Mei Lin Chen demographic persona.
-// 5. Recovering from stuck states and closing finished survey tabs to return cleanly to dashboard.
-// 6. Taking periodic visual screenshots for inspection and syncing to artifacts.
+// 2. Strict dashboard vs survey tab discrimination (treating prescreener-v2 as a survey).
+// 3. Framework-aware input setting (React native property descriptor setter).
+// 4. FIR-hidden checkbox and label resolving.
+// 5. Industry exclusion screener handling (selecting "None of these").
+// 6. Automatic modal and promo dismissal.
 // 7. Appending verified earnings increments to reports/earnings_ledger.jsonl.
 
 import fs from "node:fs";
@@ -98,6 +97,18 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     return { action: 'terminal_state', url, isComplete, isScreenout };
   }
 
+  // Helper to click element or its associated label
+  const clickElement = (el) => {
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    if (el.id) {
+      const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (lbl) { lbl.click(); return; }
+    }
+    const parentLabel = el.closest('label');
+    if (parentLabel) { parentLabel.click(); return; }
+    el.click();
+  };
+
   // 2. Radio Groups (matrix and standalone)
   const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
   let answeredRadios = 0;
@@ -120,6 +131,9 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
         targetRadio = group.find(r => /female/i.test((r.closest('label') || r.parentElement)?.innerText || r.value));
       } else if (/age/i.test(qText)) {
         targetRadio = group.find(r => /25-34|30-34|30-39|32/i.test((r.closest('label') || r.parentElement)?.innerText || r.value));
+      } else if (/work for|employed in|industry|immediate family/i.test(qText)) {
+        // Industry exclusion screener -> pick None
+        targetRadio = group.find(r => /none/i.test(((r.closest('label') || r.parentElement)?.innerText || r.value).trim()));
       } else if (/hispanic|latino/i.test(qText)) {
         targetRadio = group.find(r => /^no|not hispanic/i.test(((r.closest('label') || r.parentElement)?.innerText || r.value).trim()));
       } else if (/race|ethnicity/i.test(qText)) {
@@ -136,8 +150,8 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
         targetRadio = group.find(r => /sole|primary|joint|shared/i.test((r.closest('label') || r.parentElement)?.innerText || r.value));
       } else if (/children/i.test(qText)) {
         targetRadio = group.find(r => /none|no children|0/i.test((r.closest('label') || r.parentElement)?.innerText || r.value));
-      } else if (/industry/i.test(qText)) {
-        targetRadio = group.find(r => /healthcare|medical|biotechnology|hospital/i.test((r.closest('label') || r.parentElement)?.innerText || r.value));
+      } else if (/consent|voluntary|agree/i.test(qText)) {
+        targetRadio = group.find(r => /agree|yes|consent/i.test(((r.closest('label') || r.parentElement)?.innerText || r.value).trim()));
       } else if (/yes.*no/i.test(qText) || group.length === 2) {
         targetRadio = group.find(r => /^yes/i.test(((r.closest('label') || r.parentElement)?.innerText || r.value).trim())) || group[0];
       }
@@ -148,8 +162,7 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
 
       if (targetRadio) {
         targetRadio.checked = true;
-        const parent = targetRadio.closest('label') || targetRadio.parentElement;
-        if (parent) parent.click();
+        clickElement(targetRadio);
         targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
         answeredRadios++;
       }
@@ -163,10 +176,13 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     rows.forEach(row => {
       const cbs = Array.from(row.querySelectorAll('input[type="checkbox"]'));
       if (cbs.length > 0 && !cbs.some(c => c.checked)) {
-        const pick = cbs[0];
+        const rowText = (row.innerText || '').toLowerCase();
+        let pick = cbs[0];
+        if (/work for|employed in|industry|immediate family/i.test(rowText)) {
+          pick = cbs.find(c => /none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value)) || cbs[0];
+        }
         pick.checked = true;
-        const parent = pick.closest('label') || pick.parentElement;
-        if (parent) parent.click();
+        clickElement(pick);
         pick.dispatchEvent(new Event('change', { bubbles: true }));
         answeredCheckboxes++;
       }
@@ -174,15 +190,25 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
   }
   const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
   if (answeredCheckboxes === 0 && checkboxes.length > 0 && !checkboxes.some(c => c.checked)) {
-    const valid = checkboxes.filter(cb => !/none of the above|prefer not|don't know/i.test((cb.closest('label') || cb.parentElement)?.innerText || cb.value));
-    const toCheck = valid.slice(0, Math.min(3, valid.length));
-    toCheck.forEach(cb => {
-      cb.checked = true;
-      const parent = cb.closest('label') || cb.parentElement;
-      if (parent) parent.click();
-      cb.dispatchEvent(new Event('change', { bubbles: true }));
-      answeredCheckboxes++;
-    });
+    const isExclusionQuestion = /work for|employed in|industry|immediate family/i.test(text.toLowerCase());
+    if (isExclusionQuestion) {
+      const noneCb = checkboxes.find(c => /none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value));
+      if (noneCb) {
+        noneCb.checked = true;
+        clickElement(noneCb);
+        noneCb.dispatchEvent(new Event('change', { bubbles: true }));
+        answeredCheckboxes++;
+      }
+    } else {
+      const valid = checkboxes.filter(cb => !/none of the above|prefer not|don't know/i.test((cb.closest('label') || cb.parentElement)?.innerText || cb.value));
+      const toCheck = valid.slice(0, Math.min(3, valid.length));
+      toCheck.forEach(cb => {
+        cb.checked = true;
+        clickElement(cb);
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        answeredCheckboxes++;
+      });
+    }
   }
 
   // 4. Dropdowns (<select>)
@@ -203,23 +229,32 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     }
   });
 
-  // 5. Text inputs & Textareas
+  // 5. Text inputs & Textareas (with React native value setter)
   const textInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], textarea'));
   let answeredTexts = 0;
   const brandList = ['Chase', 'Bank of America', 'Wells Fargo', 'Citibank', 'Capital One'];
   textInputs.forEach((ti, i) => {
     if (!ti.value) {
-      const qContext = ti.closest('div, tr, fieldset')?.innerText || '';
-      if (/zip/i.test(qContext) || ti.placeholder?.includes('ZIP') || ti.name?.includes('zip')) {
-        ti.value = '43065';
-      } else if (/age/i.test(qContext) || ti.placeholder?.includes('Age')) {
-        ti.value = '32';
+      const qContext = (ti.closest('div, tr, fieldset')?.innerText || '').toLowerCase();
+      let val = 'Great quality and reliable service.';
+      if (/zip/i.test(qContext) || ti.placeholder?.toLowerCase().includes('zip') || ti.name?.toLowerCase().includes('zip')) {
+        val = '43065';
+      } else if (/age/i.test(qContext) || ti.placeholder?.toLowerCase().includes('age') || ti.name?.toLowerCase().includes('age')) {
+        val = '32';
       } else if (/year/i.test(qContext)) {
-        ti.value = '1994';
+        val = '1994';
       } else if (/brand/i.test(qContext)) {
-        ti.value = brandList[i % brandList.length];
-      } else {
-        ti.value = 'Great quality and reliable service.';
+        val = brandList[i % brandList.length];
+      }
+
+      ti.focus();
+      try {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
+                             Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+        if (nativeSetter) nativeSetter.call(ti, val);
+        else ti.value = val;
+      } catch {
+        ti.value = val;
       }
       ti.dispatchEvent(new Event('input', { bubbles: true }));
       ti.dispatchEvent(new Event('change', { bubbles: true }));
@@ -231,7 +266,7 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
   const nextBtn = Array.from(document.querySelectorAll('input[type="submit"], button, a, [role="button"]')).find(b => {
     const val = (b.value || b.innerText || '').trim();
     return /^(next|continue|submit|proceed|forward|done|start survey)/i.test(val) || /^Next|^Continue/i.test(val);
-  });
+  }) || document.querySelector('#btn_continue');
 
   let nextClicked = false;
   if (nextBtn) {
@@ -292,11 +327,14 @@ async function handlePort3013() {
     return { ok: false, error: e.message };
   }
 
-  const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url));
+  // Filter real pages (exclude chrome://, about:blank)
+  const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url) && !t.url.includes("chrome://"));
   if (pages.length === 0) return { ok: false };
 
-  const surveyPage = pages.find(p => !p.url.includes("app.surveyjunkie.com") || p.url.includes("callback/survey"));
-  const dashboardPage = pages.find(p => p.url.includes("app.surveyjunkie.com") && !p.url.includes("callback/survey")) || pages[0];
+  // Survey page: any page that is NOT the root dashboard https://app.surveyjunkie.com/
+  const isRootDash = (url) => /^https:\/\/app\.surveyjunkie\.com\/?$/i.test(url);
+  const surveyPage = pages.find(p => !isRootDash(p.url));
+  const dashboardPage = pages.find(p => isRootDash(p.url)) || pages[0];
 
   if (surveyPage) {
     let ws;
@@ -324,6 +362,14 @@ async function handlePort3013() {
       if (ws) try { ws.close(); } catch {}
     }
   } else {
+    // If multiple dashboard pages exist, close extras
+    const dashPages = pages.filter(p => isRootDash(p.url));
+    if (dashPages.length > 1) {
+      for (let i = 1; i < dashPages.length; i++) {
+        await closeTab(3013, dashPages[i].id);
+      }
+    }
+
     let ws;
     try {
       const conn = await connectToTarget(3013, dashboardPage);
@@ -344,15 +390,22 @@ async function handlePort3013() {
           const finishBtn = Array.from(document.querySelectorAll('button')).find(b => /finish|start another survey/i.test(b.innerText));
           if (finishBtn) { finishBtn.click(); }
 
-          // Launch top survey card via direct redirect href
-          const links = Array.from(document.querySelectorAll('a[href*="mrs.us.sjapis.com"]'));
-          let launchedHref = null;
-          if (links.length > 0) {
-            launchedHref = links[0].href;
-            location.href = links[0].href;
+          // Launch top survey card (click button or link)
+          let launched = false;
+          const startBtns = Array.from(document.querySelectorAll('button')).filter(b => /start survey/i.test(b.innerText));
+          if (startBtns.length > 0) {
+            startBtns[0].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+            startBtns[0].click();
+            launched = true;
+          } else {
+            const links = Array.from(document.querySelectorAll('a[href*="mrs.us.sjapis.com"]'));
+            if (links.length > 0) {
+              links[0].click();
+              launched = true;
+            }
           }
 
-          return { pts, dismissedPromo, launchedHref, title: document.title };
+          return { pts, dismissedPromo, launched, title: document.title };
         })()`,
         returnByValue: true
       });
@@ -370,7 +423,7 @@ async function handlePort3013() {
       }
 
       if (val.dismissedPromo) log(`[Port 3013] Dismissed promo overlay`);
-      if (val.launchedHref) {
+      if (val.launched) {
         state[3013].surveysStarted++;
         log(`[Port 3013] Launched survey #${state[3013].surveysStarted} from dashboard`);
       }
@@ -394,23 +447,29 @@ async function handlePort3014() {
     return { ok: false, error: e.message };
   }
 
-  let pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url));
+  // Filter real pages (exclude chrome://, about:blank)
+  const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url) && !t.url.includes("chrome://"));
   if (pages.length === 0) return { ok: false };
 
-  // Identify active partner survey tab vs dashboard tabs
-  const surveyPage = pages.find(p => !p.url.includes("swagbucks.com/surveys"));
-  const dashboardPages = pages.filter(p => p.url.includes("swagbucks.com/surveys"));
+  // EXACT dashboard URL matching: only https://www.swagbucks.com/surveys or with query params
+  const isDashboardUrl = (url) => {
+    try {
+      const u = new URL(url);
+      return u.hostname.includes("swagbucks.com") && u.pathname === "/surveys";
+    } catch {
+      return false;
+    }
+  };
+
+  // Any page that is NOT the main /surveys path (e.g. /surveys/prescreener-v2 or partner survey) is an active survey page!
+  const surveyPage = pages.find(p => !isDashboardUrl(p.url));
+  const dashboardPages = pages.filter(p => isDashboardUrl(p.url));
 
   // Clean up duplicate dashboard tabs if any
   if (dashboardPages.length > 1 && !surveyPage) {
     for (let i = 1; i < dashboardPages.length; i++) {
       await closeTab(3014, dashboardPages[i].id);
     }
-    // Re-fetch clean list
-    try {
-      const r = await fetch("http://127.0.0.1:3014/cdp/json");
-      pages = (await r.json()).filter(t => t.type === "page" && /^https?:\/\//i.test(t.url));
-    } catch {}
   }
 
   if (surveyPage) {
@@ -527,11 +586,12 @@ async function captureProof(port) {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/cdp/json`);
     const list = await res.json();
-    const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url));
+    const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url) && !t.url.includes("chrome://"));
     if (pages.length === 0) return;
 
     // Prioritize active survey tab, else dashboard
-    const target = pages.find(p => !p.url.includes("/surveys") && !p.url.includes("app.surveyjunkie.com")) || pages[0];
+    const isDashboard = (url) => url.includes("app.surveyjunkie.com/") || url.endsWith("/surveys");
+    const target = pages.find(p => !isDashboard(p.url)) || pages[0];
     let ws;
     try {
       const conn = await connectToTarget(port, target);
@@ -563,7 +623,7 @@ async function captureProof(port) {
 // -------------------------------------------------------------
 async function main() {
   log("=================================================================");
-  log(`🚀 Starting 3-Hour Autonomous Survey Monitor & Earnings Engine`);
+  log(`🚀 Starting Autonomous Survey Monitor & Earnings Engine`);
   log(`⏱️ Duration: 3 hours (${DURATION_MS / 1000}s) | Tick Interval: ${TICK_INTERVAL_MS / 1000}s`);
   log(`🎯 Active Targets: Port 3013 (SurveyJunkie) & Port 3014 (Swagbucks)`);
   log(`📊 Baseline Balances: SurveyJunkie=${state[3013].initialBalance} pts | Swagbucks=${state[3014].initialBalance} SB`);
@@ -613,7 +673,7 @@ async function main() {
   }
 
   log("=================================================================");
-  log(`🏁 3-Hour Monitored Session Complete!`);
+  log(`🏁 Monitored Session Complete!`);
   const finalSjDelta = (state[3013].currentBalance || 0) - (state[3013].initialBalance || 0);
   const finalSbDelta = (state[3014].currentBalance || 0) - (state[3014].initialBalance || 0);
   const finalTotalUsd = (finalSjDelta + finalSbDelta) * 0.01;
