@@ -375,10 +375,16 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     const val = (b.value || b.innerText || '').trim();
     const aria = (b.getAttribute('aria-label') || '').trim();
     const id = (b.id || '').trim();
+    const name = (b.name || '').trim();
+    const cls = String(b.className || '').trim();
     const dataBtn = (b.getAttribute('data-btn') || '').trim();
 
+    // Check Kantar / Dimensions / SPSS / Qualtrics / Confirmit classes and names
+    if (/mrNext|next|forward|submit|continue/i.test(name) || /mrNext|next-btn|btn-next|next-button|forward/i.test(cls)) {
+      return true;
+    }
     // Check id and data attributes (e.g. submit-btn, btn-continue, next-btn)
-    if (/submit-btn|btn_continue|next-btn|btn-next|continue-btn/i.test(id) || /submit-btn|next/i.test(dataBtn)) {
+    if (/submit-btn|btn_continue|next-btn|btn-next|continue-btn|nextbutton/i.test(id) || /submit-btn|next/i.test(dataBtn)) {
       return true;
     }
     // Check aria-label
@@ -386,8 +392,15 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
       return true;
     }
     // Check text/value
-    return /^(next|continue|submit|proceed|forward|done|start|begin)/i.test(val) || /^Next|^Continue|^Start/i.test(val);
-  }) || document.querySelector('#submit-btn, [data-btn="submit-btn"], #btn_continue, button.btn-w-icon, .next-button, .btn-next');
+    if (/^(next|continue|submit|proceed|forward|done|start|begin|>|›|»)/i.test(val) || /^Next|^Continue|^Start/i.test(val)) {
+      return true;
+    }
+    // If it's a visible submit input and only 1 exists, or it has an arrow/icon
+    if (b.tagName === 'INPUT' && b.type === 'submit') {
+      return true;
+    }
+    return false;
+  }) || document.querySelector('#submit-btn, [data-btn="submit-btn"], #btn_continue, button.btn-w-icon, .next-button, .btn-next, .mrNext, input[name="_NNext"], input[name*="Next" i], input[type="submit"]');
 
   let nextClicked = false;
   if (nextBtn) {
