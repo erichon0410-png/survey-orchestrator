@@ -171,7 +171,9 @@ try {
       const clickRes = await stealthClick(send, targetSpec);
       result = { ok: true, url: target.url, ...clickRes };
     } else {
-      const r = await send("Page.captureScreenshot", { format: "png" });
+      try { await send("Page.enable"); } catch {}
+      try { await send("Page.bringToFront"); } catch {}
+      const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       if (outPath) { fs.writeFileSync(outPath, Buffer.from(String(r.data || ""), "base64")); result = { ok: true, url: target.url, path: outPath }; }
       else result = { ok: true, url: target.url, screenshot_b64: r.data };
     }

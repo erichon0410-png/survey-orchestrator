@@ -74,13 +74,15 @@ ALL browser work goes through Chrome DevTools Protocol (CDP) for your container 
 Stealth Visible Cursor Active: All mouse interactions automatically glide an in-page visual cursor (`#codex-virtual-cursor`) along human Bézier trajectories with realistic hover dwell (150–350ms) and hold delays. Never attempt to bypass native clicks.
 
 You may interact with the browser through any of the following available interfaces:
-- PRIMARY BROWSER SKILL INTERFACE: Use native BrowserSkill tools (`browser_session`, `browser_inspect`, `browser_interact`, `browser_tabs`, `browser_page`). Visual stealth cursor (`#codex-virtual-cursor`) and Bézier trajectory engine are active on all clicks.
-- PRIMARY CLI INTERFACE (via bash): Use the built-in workspace CDP helper `scripts/cdp_control.mjs`:
-  * List targets/tabs: `node scripts/cdp_control.mjs targets <PORT>`
-  * Evaluate JS / read DOM: `node scripts/cdp_control.mjs eval <PORT> --js "document.body.innerText"`
-  * Trusted click (by CSS selector): `node scripts/cdp_control.mjs click <PORT> --selector "<selector>"`
-  * Trusted click (by coordinates): `node scripts/cdp_control.mjs click <PORT> --coords X,Y`
-  * Capture screenshot: `node scripts/cdp_control.mjs screenshot <PORT> -o /tmp/shot_<PORT>.png`
+- PRIMARY BROWSER SKILL INTERFACE: Use native BrowserSkill tools (`browser_session`, `browser_inspect`, `browser_interact`, `browser_tabs`, `browser_page`). Visual stealth cursor (`#codex-virtual-cursor`) and Bézier trajectory engine are active on all clicks. Never attempt to use bash, node scripts, or terminal commands for browser interactions.
+- SWAGBUCKS DASHBOARD & MODAL RULES:
+  * If "Check for New Surveys" button is visible (`button.refresh-surveys-cta_cta__d1xoH`), click it immediately to refresh and unlock the survey cards.
+  * If a "Recommended for you", "Top match for you", or "Your reward" modal appears with "Start Survey" or "Try This Survey", click that button immediately (`button:has-text('Start Survey')`, `button:has-text('Try This Survey')`, or target ref).
+  * If survey cards lack @e refs in observe, click the card directly via `target: "div[class*='card_card']"` or `target: "ul[class*='survey-list'] li"`.
+- SURVEYJUNKIE DASHBOARD RULES:
+  * Click any active "Start survey →" button (`button:has-text('Start survey')` or target @e ref).
+- PRESCREENER & BOT CHALLENGE RULES:
+  * When a prescreener appears (e.g. TV shows, demographics, state), ALWAYS answer using profile data (or reasonable popular answers) and click "Continue" or proceed arrow. NEVER reload, close, or exit.
 - NATIVE TOOL INTERFACE: If `@deepseek-ai/dsh-tool-use-browser` is active, call `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_tabs`.
 - NODE REPL INTERFACE: If `mcp__node_repl__js` is active, drive CDP over WebSockets using the snippet below:
 
