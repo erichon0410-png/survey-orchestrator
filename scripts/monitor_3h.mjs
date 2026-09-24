@@ -99,14 +99,18 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
 
   // Helper to click element or its associated label
   const clickElement = (el) => {
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-    if (el.id) {
-      const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-      if (lbl) { lbl.click(); return; }
-    }
-    const parentLabel = el.closest('label');
-    if (parentLabel) { parentLabel.click(); return; }
-    el.click();
+    if (!el) return;
+    try {
+      if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      if (el.id) {
+        const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+        if (lbl && typeof lbl.click === 'function') { lbl.click(); return; }
+      }
+      const parentLabel = el.closest ? el.closest('label') : null;
+      if (parentLabel && typeof parentLabel.click === 'function') { parentLabel.click(); return; }
+      if (typeof el.click === 'function') el.click();
+      else if (typeof el.dispatchEvent === 'function') el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    } catch (e) {}
   };
 
   // 2. Radio Groups (matrix and standalone)
@@ -182,8 +186,8 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
         const valid = customChoices.filter(c => !/none|other|prefer not/i.test(c.innerText));
         const toPick = valid.slice(0, Math.min(2, valid.length));
         toPick.forEach(c => {
-          c.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-          (c.querySelector('button') || c).click();
+          const target = c.querySelector ? (c.querySelector('button') || c) : c;
+          clickElement(target);
           c.dispatchEvent(new Event('change', { bubbles: true }));
         });
         answeredRadios += toPick.length;
@@ -219,8 +223,8 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
         }
 
         if (targetChoice) {
-          targetChoice.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-          (targetChoice.querySelector('button') || targetChoice).click();
+          const target = targetChoice.querySelector ? (targetChoice.querySelector('button') || targetChoice) : targetChoice;
+          clickElement(target);
           targetChoice.dispatchEvent(new Event('click', { bubbles: true }));
           answeredRadios++;
         }
@@ -319,9 +323,8 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
                    listItems.find(i => /united states|english/i.test(i.innerText)) ||
                    listItems[1] || listItems[0];
       if (ohio) {
-        ohio.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-        const targetBtn = ohio.querySelector('button') || ohio;
-        targetBtn.click();
+        const targetBtn = ohio.querySelector ? (ohio.querySelector('button') || ohio) : ohio;
+        clickElement(targetBtn);
         targetBtn.dispatchEvent(new Event('change', { bubbles: true }));
         answeredSelects++;
       }
