@@ -15,6 +15,8 @@ const TARGET_PATTERNS = [
   /codex exec/,
   /(?:^|\/)dsh\s+.*--profile\s+headless/,
   /auto_fixer\.mjs/,
+  /monitor_3h\.mjs/,
+  /start_presence_surveys\.mjs/,
 ];
 
 function getFleetProcesses() {

@@ -26,7 +26,7 @@ try {
 }
 
 const PORTS = [3013, 3014];
-const DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
+const DURATION_MS = process.env.MONITOR_DURATION_MS ? Number(process.env.MONITOR_DURATION_MS) : (12 * 60 * 60 * 1000); // Default 12 hours
 const TICK_INTERVAL_MS = 8000; // 8 seconds per cycle
 const LEDGER_FILE = path.join(ROOT, "reports", "earnings_ledger.jsonl");
 const LOG_FILE = path.join(ROOT, "logs", "monitor_3h.log");
@@ -83,7 +83,7 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
 
   // 1. Check for completion or screenout terminal screens
   const isComplete = /thank you for completing|survey completed|you've earned|you earned|rewarded|congratulations/i.test(text);
-  const isScreenout = /not a good match|sorry.*did not qualify|quota.*full|survey.*expired|already participated|we're sorry that survey didn't work/i.test(text);
+  const isScreenout = /not a good match|sorry.*did not qualify|quota.*full|survey.*expired|already participated|we're sorry that survey didn't work|not authorized to access this resource|internal server error|bad gateway/i.test(text) || url.includes('/production/exit') || url.includes('/exit?') || url.includes('status=2');
 
   if (isComplete || isScreenout) {
     const nextSurveyBtn = Array.from(document.querySelectorAll('button, a')).find(b =>
@@ -161,12 +161,71 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
       }
 
       if (targetRadio) {
-        targetRadio.checked = true;
         clickElement(targetRadio);
+        targetRadio.checked = true;
+        targetRadio.dispatchEvent(new Event('input', { bubbles: true }));
         targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
         answeredRadios++;
       }
     });
+  }
+
+  // 2b. Custom choice buttons / Pollfish / Typeform / InBrain (.answer, [role="radio"], .choice)
+  const customChoices = Array.from(document.querySelectorAll('.answer, [role="radio"], [role="option"], .choice, .survey-option, [class*="answer--single"], [class*="answer--multi"]'));
+  if (answeredRadios === 0 && customChoices.length > 0) {
+    const isSelected = (el) => el.classList.contains('is-selected') || el.classList.contains('selected') || el.classList.contains('active') || el.classList.contains('answerClick') || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true';
+    if (!customChoices.some(isSelected)) {
+      const qText = text.toLowerCase();
+      const isMulti = /select all that apply|choose all|all that apply/i.test(qText) || customChoices.some(c => c.classList.contains('answer--multi-choice'));
+
+      if (isMulti) {
+        const valid = customChoices.filter(c => !/none|other|prefer not/i.test(c.innerText));
+        const toPick = valid.slice(0, Math.min(2, valid.length));
+        toPick.forEach(c => {
+          c.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          (c.querySelector('button') || c).click();
+          c.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        answeredRadios += toPick.length;
+      } else {
+        let targetChoice = null;
+
+        if (/gender/i.test(qText)) {
+          targetChoice = customChoices.find(c => /female/i.test(c.innerText));
+        } else if (/ethnicity|race/i.test(qText)) {
+          targetChoice = customChoices.find(c => /asian|chinese/i.test(c.innerText));
+        } else if (/income/i.test(qText)) {
+          targetChoice = customChoices.find(c => /75,000|80,000|100,000/i.test(c.innerText));
+        } else if (/education/i.test(qText)) {
+          targetChoice = customChoices.find(c => /doctorate|phd|master|graduate/i.test(c.innerText));
+        } else if (/employment|work status/i.test(qText)) {
+          targetChoice = customChoices.find(c => /employed full-time|full time/i.test(c.innerText));
+        } else if (/marital/i.test(qText)) {
+          targetChoice = customChoices.find(c => /married/i.test(c.innerText));
+        } else if (/children/i.test(qText)) {
+          targetChoice = customChoices.find(c => /none|no children|0/i.test(c.innerText));
+        } else if (/work for|employed in|industry|immediate family/i.test(qText)) {
+          targetChoice = customChoices.find(c => /none of the above|none/i.test(c.innerText));
+        } else if (/agree|consent|voluntary/i.test(qText)) {
+          targetChoice = customChoices.find(c => /agree|yes|consent/i.test(c.innerText));
+        } else if (/yes.*no/i.test(qText) || customChoices.length === 2) {
+          targetChoice = customChoices.find(c => /^yes/i.test(c.innerText.trim())) || customChoices[0];
+        }
+
+        if (!targetChoice) {
+          targetChoice = customChoices.find(c => /somewhat open|very open|open|agree|satisfied|familiar|somewhat|very|often|frequently|always/i.test(c.innerText)) ||
+                         customChoices.find(c => !/none|prefer not|other/i.test(c.innerText)) ||
+                         customChoices[0];
+        }
+
+        if (targetChoice) {
+          targetChoice.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          (targetChoice.querySelector('button') || targetChoice).click();
+          targetChoice.dispatchEvent(new Event('click', { bubbles: true }));
+          answeredRadios++;
+        }
+      }
+    }
   }
 
   // 3. Checkboxes (multi-select and per-row matrices)
@@ -189,13 +248,29 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     });
   }
   const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+
+  // Mandatory Consent / Terms / GDPR checkboxes
+  const consentCbs = checkboxes.filter(c =>
+    /consent|agree|terms|policy|gdpr/i.test(c.name || c.id || (c.closest('label') || c.parentElement)?.innerText || '')
+  );
+  consentCbs.forEach(c => {
+    if (!c.checked) {
+      clickElement(c);
+      c.checked = true;
+      c.dispatchEvent(new Event('input', { bubbles: true }));
+      c.dispatchEvent(new Event('change', { bubbles: true }));
+      answeredCheckboxes++;
+    }
+  });
+
   if (answeredCheckboxes === 0 && checkboxes.length > 0 && !checkboxes.some(c => c.checked)) {
     const isExclusionQuestion = /work for|employed in|industry|immediate family/i.test(text.toLowerCase());
     if (isExclusionQuestion) {
       const noneCb = checkboxes.find(c => /none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value));
       if (noneCb) {
-        noneCb.checked = true;
         clickElement(noneCb);
+        noneCb.checked = true;
+        noneCb.dispatchEvent(new Event('input', { bubbles: true }));
         noneCb.dispatchEvent(new Event('change', { bubbles: true }));
         answeredCheckboxes++;
       }
@@ -203,8 +278,9 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
       const valid = checkboxes.filter(cb => !/none of the above|prefer not|don't know/i.test((cb.closest('label') || cb.parentElement)?.innerText || cb.value));
       const toCheck = valid.slice(0, Math.min(3, valid.length));
       toCheck.forEach(cb => {
-        cb.checked = true;
         clickElement(cb);
+        cb.checked = true;
+        cb.dispatchEvent(new Event('input', { bubbles: true }));
         cb.dispatchEvent(new Event('change', { bubbles: true }));
         answeredCheckboxes++;
       });
@@ -229,19 +305,48 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
     }
   });
 
+  // 4b. Custom Dropdown Toggles (Pollfish / Typeform / custom select buttons)
+  const dropdownToggle = document.querySelector('[data-testid="dropdown-select-button"], .dropdown-select-toggle, [class*="dropdown-toggle"]');
+  if (dropdownToggle) {
+    const list = document.querySelector('.dropdown-select-list, [role="listbox"]');
+    if (!list || list.offsetParent === null) {
+      dropdownToggle.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      dropdownToggle.click();
+    }
+    const listItems = Array.from(document.querySelectorAll('li.dropdown-select-list-item, [role="option"]'));
+    if (listItems.length > 0) {
+      const ohio = listItems.find(i => /ohio/i.test(i.innerText)) ||
+                   listItems.find(i => /united states|english/i.test(i.innerText)) ||
+                   listItems[1] || listItems[0];
+      if (ohio) {
+        ohio.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        const targetBtn = ohio.querySelector('button') || ohio;
+        targetBtn.click();
+        targetBtn.dispatchEvent(new Event('change', { bubbles: true }));
+        answeredSelects++;
+      }
+    }
+  }
+
   // 5. Text inputs & Textareas (with React native value setter)
   const textInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], textarea'));
   let answeredTexts = 0;
   const brandList = ['Chase', 'Bank of America', 'Wells Fargo', 'Citibank', 'Capital One'];
   textInputs.forEach((ti, i) => {
     if (!ti.value) {
-      const qContext = (ti.closest('div, tr, fieldset')?.innerText || '').toLowerCase();
+      const qContext = (ti.closest('div, tr, fieldset, section, form, main')?.innerText || text || '').toLowerCase();
       let val = 'Great quality and reliable service.';
-      if (/zip/i.test(qContext) || ti.placeholder?.toLowerCase().includes('zip') || ti.name?.toLowerCase().includes('zip')) {
+
+      const isNumeric = ti.type === 'number' || ti.classList.contains('input-text--numeric') || /numeric|number/i.test(ti.className);
+      const isAge = /age|how old/i.test(qContext) || /age/i.test(ti.placeholder || '') || /age/i.test(ti.name || '') || /at least 1 and no more than 99/i.test(text);
+      const isZip = /zip|postal/i.test(qContext) || /zip/i.test(ti.placeholder || '') || /zip/i.test(ti.name || '');
+      const isYear = /year|born/i.test(qContext) || /year/i.test(ti.placeholder || '');
+
+      if (isZip) {
         val = '43065';
-      } else if (/age/i.test(qContext) || ti.placeholder?.toLowerCase().includes('age') || ti.name?.toLowerCase().includes('age')) {
+      } else if (isAge || isNumeric) {
         val = '32';
-      } else if (/year/i.test(qContext)) {
+      } else if (isYear) {
         val = '1994';
       } else if (/brand/i.test(qContext)) {
         val = brandList[i % brandList.length];
@@ -265,8 +370,21 @@ const INPAGE_SOLVER_SCRIPT = `(() => {
   // 6. Next / Continue / Submit button
   const nextBtn = Array.from(document.querySelectorAll('input[type="submit"], button, a, [role="button"]')).find(b => {
     const val = (b.value || b.innerText || '').trim();
+    const aria = (b.getAttribute('aria-label') || '').trim();
+    const id = (b.id || '').trim();
+    const dataBtn = (b.getAttribute('data-btn') || '').trim();
+
+    // Check id and data attributes (e.g. submit-btn, btn-continue, next-btn)
+    if (/submit-btn|btn_continue|next-btn|btn-next|continue-btn/i.test(id) || /submit-btn|next/i.test(dataBtn)) {
+      return true;
+    }
+    // Check aria-label
+    if (/submit|next|continue|proceed|forward|done/i.test(aria)) {
+      return true;
+    }
+    // Check text/value
     return /^(next|continue|submit|proceed|forward|done|start survey)/i.test(val) || /^Next|^Continue/i.test(val);
-  }) || document.querySelector('#btn_continue');
+  }) || document.querySelector('#submit-btn, [data-btn="submit-btn"], #btn_continue, button.btn-w-icon, .next-button, .btn-next');
 
   let nextClicked = false;
   if (nextBtn) {
@@ -331,10 +449,25 @@ async function handlePort3013() {
   const pages = list.filter(t => t.type === "page" && /^https?:\/\//i.test(t.url) && !t.url.includes("chrome://"));
   if (pages.length === 0) return { ok: false };
 
-  // Survey page: any page that is NOT the root dashboard https://app.surveyjunkie.com/
+  // Survey page: any page that is NOT an app.surveyjunkie.com page
+  const isSjApp = (url) => url.includes("app.surveyjunkie.com");
   const isRootDash = (url) => /^https:\/\/app\.surveyjunkie\.com\/?$/i.test(url);
-  const surveyPage = pages.find(p => !isRootDash(p.url));
-  const dashboardPage = pages.find(p => isRootDash(p.url)) || pages[0];
+  const surveyPage = pages.find(p => !isSjApp(p.url));
+  const dashboardPage = pages.find(p => isRootDash(p.url)) || pages.find(p => isSjApp(p.url)) || pages[0];
+
+  // If on an app.surveyjunkie.com page other than root (e.g. /rewards), navigate to home dashboard
+  if (!surveyPage && dashboardPage && !isRootDash(dashboardPage.url)) {
+    log(`[Port 3013] On ${dashboardPage.url} instead of home dashboard -> navigating to root`);
+    let ws;
+    try {
+      const conn = await connectToTarget(3013, dashboardPage);
+      ws = conn.ws;
+      await conn.send("Page.navigate", { url: "https://app.surveyjunkie.com/" });
+    } finally {
+      if (ws) try { ws.close(); } catch {}
+    }
+    return { ok: true };
+  }
 
   if (surveyPage) {
     let ws;
@@ -386,21 +519,42 @@ async function handlePort3013() {
           let dismissedPromo = false;
           if (toastX) { toastX.click(); dismissedPromo = true; }
 
-          // Close modal or prescreener if finish is available
-          const finishBtn = Array.from(document.querySelectorAll('button')).find(b => /finish|start another survey/i.test(b.innerText));
-          if (finishBtn) { finishBtn.click(); }
+          // In-dashboard prescreener qualification modal handling
+          const modal = document.querySelector('[role="dialog"], [class*="modal"], [class*="Modal"], div[class*="ixhRPp"]');
+          const hasPresc = modal || /qualification|save time|how many children|health areas|do you currently own/i.test(document.body?.innerText || '');
+          if (hasPresc) {
+            const radios = Array.from(document.querySelectorAll('input[type="radio"], [role="radio"]'));
+            const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+            if (radios.length > 0 && !radios.some(r => r.checked)) {
+              const pick = radios.find(r => /none|no |wireless earbuds|smart tv/i.test((r.closest('label') || r.parentElement)?.innerText || r.value)) || radios[0];
+              pick.scrollIntoView({ block: 'center', inline: 'center' });
+              pick.click();
+              pick.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if (checkboxes.length > 0 && !checkboxes.some(c => c.checked)) {
+              const pick = checkboxes.find(c => /no illness|none/i.test((c.closest('label') || c.parentElement)?.innerText || c.value)) || checkboxes[0];
+              pick.scrollIntoView({ block: 'center', inline: 'center' });
+              pick.click();
+              pick.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const finishBtn = Array.from(document.querySelectorAll('button')).find(b => /finish|start another survey/i.test(b.innerText));
+            if (finishBtn && !finishBtn.disabled) {
+              finishBtn.click();
+              return { pts, dismissedPromo, launched: true, modalPrescSolved: true, title: document.title };
+            }
+          }
 
-          // Launch top survey card (click button or link)
+          // Launch top survey card (direct link navigation or start button)
           let launched = false;
-          const startBtns = Array.from(document.querySelectorAll('button')).filter(b => /start survey/i.test(b.innerText));
-          if (startBtns.length > 0) {
-            startBtns[0].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-            startBtns[0].click();
+          const links = Array.from(document.querySelectorAll('a[href*="mrs.us.sjapis.com"]'));
+          if (links.length > 0) {
+            const target = links.find(l => /50 pts|155 pts|55 pts|75 pts|100 pts/i.test(l.innerText)) || links[0];
+            location.href = target.href;
             launched = true;
           } else {
-            const links = Array.from(document.querySelectorAll('a[href*="mrs.us.sjapis.com"]'));
-            if (links.length > 0) {
-              links[0].click();
+            const startBtns = Array.from(document.querySelectorAll('button')).filter(b => /start survey/i.test(b.innerText));
+            if (startBtns.length > 0) {
+              startBtns[0].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+              startBtns[0].click();
               launched = true;
             }
           }
@@ -682,6 +836,16 @@ async function main() {
   log(`Total Verified Earnings: +$${finalTotalUsd.toFixed(2)} USD`);
   log("=================================================================");
 }
+
+let shuttingDown = false;
+function onSignal(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`🛑 Received ${sig}. Gracefully shutting down monitor...`);
+  process.exit(0);
+}
+process.on("SIGTERM", () => onSignal("SIGTERM"));
+process.on("SIGINT", () => onSignal("SIGINT"));
 
 main().catch(err => {
   log(`FATAL: ${err.stack || err.message}`);
