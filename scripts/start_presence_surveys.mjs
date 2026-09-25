@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/start_presence_surveys.mjs — Launch autonomous survey monitor on presence departure.
+// scripts/start_presence_surveys.mjs — Launch autonomous AI survey fleet on presence departure.
 import path from "node:path";
 import fs from "node:fs";
 import { execSync, spawn } from "node:child_process";
@@ -9,63 +9,79 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const LOGS_DIR = path.join(ROOT, "logs");
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+const LOG_FILE = path.join(LOGS_DIR, "presence_start.log");
 
-const MONITOR_SCRIPT = path.join(ROOT, "scripts", "monitor_3h.mjs");
-const LOG_FILE = path.join(LOGS_DIR, "monitor_3h.log");
-
-// 1. Check if already running
-let existingPid = null;
-try {
-  const p = execSync("pgrep -f '[m]onitor_3h\\.mjs' || true", { encoding: "utf-8" }).trim();
-  if (p) {
-    const pids = p.split("\n").map(x => x.trim()).filter(Boolean);
-    if (pids.length > 0) existingPid = pids[0];
-  }
-} catch {}
-
-if (existingPid) {
-  console.log(`[presence_start] Survey monitor is already running (PID ${existingPid}). No-op.`);
-  process.exit(0);
+function log(msg) {
+  const line = `[${new Date().toISOString()}] [presence_start] ${msg}`;
+  console.log(line);
+  try { fs.appendFileSync(LOG_FILE, line + "\n"); } catch {}
 }
 
-// 2. Ensure docker containers for 3013 and 3014 are running
-for (const container of ["SurveyCompleter-gmail-03", "SurveyCompleter-gmail-04"]) {
+log("Starting autonomous survey fleet deployment across all 5 ports...");
+
+// 1. Ensure all 5 docker containers are running
+const CONTAINERS = [
+  "SurveyCompleter-gmail-03",
+  "SurveyCompleter-gmail-04",
+  "SurveyCompleter-gmail-05",
+  "SurveyCompleter-gmail-06",
+  "SurveyCompleter-gmail-07",
+];
+
+for (const container of CONTAINERS) {
   try {
     const running = execSync(`docker inspect -f '{{.State.Running}}' ${container} 2>/dev/null || true`, { encoding: "utf-8" }).trim();
     if (running !== "true") {
-      console.log(`[presence_start] Starting container ${container}...`);
+      log(`Starting container ${container}...`);
       execSync(`docker start ${container}`, { timeout: 15000, stdio: "ignore" });
     }
   } catch (e) {
-    console.warn(`[presence_start] Warning checking ${container}: ${e.message}`);
+    log(`Warning checking container ${container}: ${e.message}`);
   }
 }
 
-// 3. Ensure bsk_relay is running
+// 2. Ensure bsk_relay is running
 try {
-  const p = execSync("pgrep -f '[b]sk_relay\\.mjs' || true", { encoding: "utf-8" }).trim();
+  const p = execSync("pgrep -f 'scripts/bsk_relay\\.mjs' || true", { encoding: "utf-8" }).trim();
   if (!p) {
     const relayScript = path.join(ROOT, "scripts", "bsk_relay.mjs");
     if (fs.existsSync(relayScript)) {
-      const child = spawn("node", [relayScript], { detached: true, stdio: "ignore" });
+      const child = spawn("node", [relayScript], { cwd: ROOT, detached: true, stdio: "ignore" });
       child.unref();
+      log(`Auto-started bsk relay daemon (PID ${child.pid})`);
     }
   }
-} catch {}
+} catch (e) {
+  log(`Warning checking bsk_relay: ${e.message}`);
+}
 
-// 4. Spawn monitor_3h.mjs detached in background
-const out = fs.openSync(LOG_FILE, "a");
-const child = spawn("node", [MONITOR_SCRIPT], {
-  cwd: ROOT,
-  detached: true,
-  stdio: ["ignore", out, out],
-  env: {
-    ...process.env,
-    MONITOR_DURATION_MS: String(24 * 60 * 60 * 1000), // 24 hours
-  },
-});
-fs.closeSync(out);
-child.unref();
+// 3. Ensure supervisor daemon is running to maintain the fleet
+try {
+  let supPid = null;
+  const p = execSync("pgrep -f 'fleet_supervisor\\.mjs' || true", { encoding: "utf-8" }).trim();
+  if (p) {
+    const pids = p.split("\n").map(x => x.trim()).filter(Boolean);
+    if (pids.length > 0) supPid = pids[0];
+  }
+  if (!supPid) {
+    log("Supervisor not running. Launching start_supervisor.sh...");
+    execSync("bash scripts/start_supervisor.sh", { cwd: ROOT, timeout: 10000, stdio: "ignore" });
+    log("Supervisor started.");
+  } else {
+    log(`Supervisor is already active (PID ${supPid}).`);
+  }
+} catch (e) {
+  log(`Warning starting supervisor: ${e.message}`);
+}
 
-console.log(`✅ [presence_start] Successfully launched autonomous survey monitor (PID ${child.pid}).`);
+// 4. Deploy fleet survey agents across all 5 ports immediately
+try {
+  log("Deploying AI model survey agents via deploy_fleet.mjs...");
+  const deployOut = execSync("node scripts/deploy_fleet.mjs", { cwd: ROOT, encoding: "utf-8", timeout: 30000 });
+  log(`Deployment summary:\n${deployOut.trim()}`);
+} catch (e) {
+  log(`Error during deploy_fleet: ${e.message}`);
+}
+
+log("✅ All fleet survey agents deployed successfully.");
 process.exit(0);

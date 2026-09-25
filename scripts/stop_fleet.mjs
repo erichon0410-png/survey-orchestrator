@@ -17,6 +17,8 @@ const TARGET_PATTERNS = [
   /auto_fixer\.mjs/,
   /monitor_3h\.mjs/,
   /start_presence_surveys\.mjs/,
+  /bsk_relay\.mjs/,
+  /context7/,
 ];
 
 function getFleetProcesses() {
