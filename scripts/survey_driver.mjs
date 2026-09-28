@@ -120,9 +120,8 @@ const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? (pr
 const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || (HARNESS === "dsh" ? "unsloth-studio" : "openrouter");
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "off";
 const PATCH_PATH = args.patch || process.env.SURVEY_PATCH_PATH || null;
-// Hard per-turn hang guard: a single codex turn may legitimately run long (the model polls the
-// platform every ~10 min), so this is generous — it only trips on a TRUE hang (no exit at all).
-const TURNS_TIMEOUT_MS = Number(process.env.SURVEY_TURN_TIMEOUT_MS) || 90 * 60 * 1000;
+// Hard per-turn hang guard: default 15m, configurable via SURVEY_TURN_TIMEOUT_MS
+export const TURNS_TIMEOUT_MS = Number(process.env.SURVEY_TURN_TIMEOUT_MS) || 15 * 60 * 1000;
 
 // Workspace root: the driver is spawned with cwd = workspaceRoot, so derive everything from here.
 const WS = process.cwd();
@@ -505,6 +504,107 @@ export async function pruneExcessTabs(port, maxTabs = 3) {
   }
 }
 
+// ---------- DOM Liveness Heartbeat Watchdog ----------
+
+/**
+ * Periodically queries CDP for the active survey/page target.
+ * If the page state (URL + title) remains unchanged for > maxStallMs, triggers onStall.
+ */
+export function createDomLivenessHeartbeat({
+  port,
+  maxStallMs = 3 * 60 * 1000,
+  pollIntervalMs = 30 * 1000,
+  fetchJson,
+  onStall,
+  cdpAction,
+} = {}) {
+  let timer = null;
+  let stopped = false;
+  let lastKey = null;
+  let lastChangeTime = Date.now();
+
+  const doFetch = fetchJson || (async (url) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  });
+
+  async function check() {
+    if (stopped) return;
+    try {
+      const targets = await doFetch(`http://127.0.0.1:${port}/cdp/json`);
+      if (stopped || !Array.isArray(targets) || targets.length === 0) return;
+
+      const pages = targets.filter((t) => t && (t.type === "page" || !t.type));
+      if (pages.length === 0) return;
+
+      const httpPages = pages.filter((p) => p.url && /^https?:\/\//i.test(p.url));
+      const target = httpPages.length > 0 ? httpPages[httpPages.length - 1] : pages[pages.length - 1];
+      if (!target) return;
+
+      const currentKey = `${target.url || ""}::${target.title || ""}`;
+      const now = Date.now();
+
+      if (lastKey === null) {
+        lastKey = currentKey;
+      } else if (currentKey !== lastKey) {
+        lastKey = currentKey;
+        lastChangeTime = now;
+      } else {
+        const stalledMs = now - lastChangeTime;
+        if (stalledMs >= maxStallMs) {
+          if (typeof onStall === "function") {
+            try {
+              await onStall({
+                port,
+                url: target.url,
+                title: target.title,
+                stalledMs,
+              });
+            } catch {}
+          }
+          if (typeof cdpAction === "function") {
+            try {
+              await cdpAction({ port, target, stalledMs });
+            } catch {}
+          }
+        }
+      }
+    } catch {
+      // Network/CDP errors shouldn't crash the heartbeat loop
+    }
+  }
+
+  if (pollIntervalMs > 0) {
+    timer = setInterval(check, pollIntervalMs);
+    if (timer && typeof timer.unref === "function") {
+      timer.unref();
+    }
+  }
+
+  return {
+    check,
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    },
+    get isStopped() {
+      return stopped;
+    },
+    get lastKey() {
+      return lastKey;
+    },
+    get lastChangeTime() {
+      return lastChangeTime;
+    },
+  };
+}
+
+export const startDomLivenessHeartbeat = createDomLivenessHeartbeat;
+
 // ---------- target-reached detection with baseline delta tracking ----------
 
 /**
@@ -846,8 +946,52 @@ function runTurn(argsArr) {
       return done({ code: -1, signal: null, threadId: null, spawnError: String(e) });
     }
 
+    let heartbeat = null;
+    let consecutiveStallChecks = 0;
+    if (PORT) {
+      heartbeat = createDomLivenessHeartbeat({
+        port: PORT,
+        maxStallMs: 3 * 60 * 1000,
+        pollIntervalMs: 30 * 1000,
+        onStall: async ({ port, url, title, stalledMs }) => {
+          consecutiveStallChecks++;
+          log("warn", `DOM stall detected: state unchanged for ${Math.round(stalledMs / 1000)}s on ${url} (${title})`, {
+            port,
+            url,
+            title,
+            stalledMs,
+            consecutiveStallChecks,
+          });
+          const pub = getPublisher();
+          if (pub) {
+            pub.publish({
+              source: "driver",
+              port,
+              event: "dom_stall_detected",
+              message: `DOM stall detected on port ${port}: unchanged for ${Math.round(stalledMs / 1000)}s`,
+              url,
+              title,
+              stalledMs,
+            });
+          }
+          if (stalledMs >= 4.5 * 60 * 1000 || consecutiveStallChecks >= 2) {
+            log("warn", "DOM stall persisted (>4.5m or 2 checks); sending SIGTERM to codex child", {
+              port,
+              stalledMs,
+              consecutiveStallChecks,
+            });
+            try { child.kill("SIGTERM"); } catch {}
+            setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 8000);
+          }
+        },
+      });
+    }
+
     const onExit = (code, signal) => {
       clearTimeout(timer);
+      if (heartbeat) {
+        try { heartbeat.stop(); } catch {}
+      }
       if (streams) {
         try { streams.close(); } catch {}
       }
@@ -858,6 +1002,9 @@ function runTurn(argsArr) {
     child.on("exit", onExit);
     child.on("error", (e) => {
       clearTimeout(timer);
+      if (heartbeat) {
+        try { heartbeat.stop(); } catch {}
+      }
       if (streams) {
         try { streams.close(); } catch {}
       }
