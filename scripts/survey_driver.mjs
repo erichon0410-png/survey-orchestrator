@@ -326,7 +326,8 @@ const NUDGE = [
 // ---------- logging (stdout/stderr -> driver log file set by deployAgent) ----------
 function ts() { return new Date().toISOString(); }
 function log(level, msg, extra) {
-  let line = `[${ts()}] [driver:${PORT}] ${level} ${msg}`;
+  const p = PORT ?? "fleet";
+  let line = `[${ts()}] [driver:${p}] ${level} ${msg}`;
   if (extra !== undefined) { try { line += " " + JSON.stringify(extra); } catch {} }
   // eslint-disable-next-line no-console
   console.log(line);
@@ -845,16 +846,40 @@ export function setupCodexStreams({
   const stderrFd = fs.openSync(stderrPath, "a");
   let stdoutBuf = "";
   let stderrBuf = "";
+  const activePort = port || PORT;
 
   if (child.stdout) {
     child.stdout.on("data", (chunk) => {
-      try { fs.writeSync(stdoutFd, chunk); } catch {}
+      try {
+        fs.writeSync(stdoutFd, chunk);
+        fs.fdatasyncSync(stdoutFd);
+      } catch {}
       stdoutBuf += chunk.toString("utf-8");
       let idx;
       while ((idx = stdoutBuf.indexOf("\n")) !== -1) {
         const line = stdoutBuf.slice(0, idx).trim();
         stdoutBuf = stdoutBuf.slice(idx + 1);
         if (line) {
+          if (line.includes("ACTION:") || line.includes("AGENT_ACTION:")) {
+            log("info", `agent action: ${line}`);
+            if (activePort) {
+              try {
+                const driverLogFile = path.join(LOGS_DIR, `agent_${activePort}_driver.log`);
+                fs.appendFileSync(driverLogFile, `[${ts()}] [driver:${activePort}] info agent action: ${line}\n`, "utf-8");
+              } catch {}
+            }
+            if (publisher) {
+              if (typeof publisher.flush === "function") {
+                try { publisher.flush(); } catch {}
+              }
+              publisher.publish({
+                source: "codex",
+                port: activePort,
+                event: "agent_action",
+                message: line,
+              });
+            }
+          }
           if (onThreadId && (line.includes("thread_id") || line.includes("thread.started"))) {
             try {
               const d = JSON.parse(line);
@@ -872,7 +897,10 @@ export function setupCodexStreams({
 
   if (child.stderr) {
     child.stderr.on("data", (chunk) => {
-      try { fs.writeSync(stderrFd, chunk); } catch {}
+      try {
+        fs.writeSync(stderrFd, chunk);
+        fs.fdatasyncSync(stderrFd);
+      } catch {}
       stderrBuf += chunk.toString("utf-8");
       let idx;
       while ((idx = stderrBuf.indexOf("\n")) !== -1) {
@@ -894,9 +922,32 @@ export function setupCodexStreams({
 
   return {
     close() {
-      if (stdoutBuf.trim() && publisher) {
-        const ev = normalizeCodexLine(stdoutBuf.trim(), port);
-        if (ev) publisher.publish(ev);
+      if (stdoutBuf.trim()) {
+        const line = stdoutBuf.trim();
+        if (line.includes("ACTION:") || line.includes("AGENT_ACTION:")) {
+          log("info", `agent action: ${line}`);
+          if (activePort) {
+            try {
+              const driverLogFile = path.join(LOGS_DIR, `agent_${activePort}_driver.log`);
+              fs.appendFileSync(driverLogFile, `[${ts()}] [driver:${activePort}] info agent action: ${line}\n`, "utf-8");
+            } catch {}
+          }
+          if (publisher) {
+            if (typeof publisher.flush === "function") {
+              try { publisher.flush(); } catch {}
+            }
+            publisher.publish({
+              source: "codex",
+              port: activePort,
+              event: "agent_action",
+              message: line,
+            });
+          }
+        }
+        if (publisher) {
+          const ev = normalizeCodexLine(line, port);
+          if (ev) publisher.publish(ev);
+        }
       }
       try { fs.closeSync(stdoutFd); } catch {}
       try { fs.closeSync(stderrFd); } catch {}
