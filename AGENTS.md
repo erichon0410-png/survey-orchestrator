@@ -67,6 +67,25 @@ survey-orchestrator/
    - `scripts/morning_trigger.sh` and `scripts/autostart_fleet.sh` are intentionally disabled with early `exit 0` guards. Do not remove these guards unless specifically instructed by the operator.
    - All Windows Task Scheduler tasks and WSL crontabs for morning startup have been deleted.
 2. **Always Run Tests**:
-   - Before finishing any task, run `npm test` to verify all 15 test suites pass.
+   - Before finishing any task, run `npm test` to verify all 19 test suites pass.
 3. **Keep the Workspace Clean**:
    - Never create scratch scripts in the root directory or directly under `scripts/`. Place any temporary debugging experiments in `archive/scratch/`.
+
+---
+
+## 6. Anti-Stall Architecture & Watchdogs
+1. **15-Minute Watchdog Cap**:
+   - `TURNS_TIMEOUT_MS = 15 * 60 * 1000` (15 minutes). No agent turn can ever hang for 90 minutes.
+2. **In-Flight CDP DOM Liveness Heartbeat**:
+   - `createDomLivenessHeartbeat` runs every 30s during active turns.
+   - If the active survey page URL and title remain completely static for > 3 minutes (180s), it records a stall and dispatches a CDP recovery action.
+   - If the stall persists for 4.5 minutes (2 consecutive checks), it escalates with `SIGTERM` to cleanly cycle the turn.
+3. **Discrete Single-Survey Turn Contract**:
+   - Each turn is strictly bounded to completing one questionnaire or resolving a terminal screener outcome.
+   - Upon survey completion or terminal disqualification, the agent exits its turn with status 0, allowing the driver to capture fresh baseline balances and immediately relaunch.
+   - Pre-interaction action streaming: the agent emits `ACTION: <inspect|click|answer> | TARGET: <selector>` before every browser action for real-time visibility.
+4. **Supervisor Standby & Cooldowns**:
+   - The supervisor never calls `process.exit(0)` on `isFleetTerminal`. When all ports reach terminal or idle state, it logs `fleet_standby` and enters a 15-minute resident sleep before re-checking dashboards.
+   - Idle timeouts trigger temporary 15-minute cooldowns (`idleCooldowns`) rather than permanent 24-hour ban files.
+5. **Automated Modal & Prescreener Unstuck Handler**:
+   - `detectAndDismissStallModals` in `scripts/auto_fixer.mjs` automatically detects and clears "Missing Answer(s)" validation prompts, cookie banners, and stuck prescreener continue buttons.
