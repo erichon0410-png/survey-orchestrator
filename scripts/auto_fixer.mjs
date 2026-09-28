@@ -63,6 +63,284 @@ function hasIdleTodayMarker(port, inboxDir) {
   return findMarker(inboxDir, re) !== null || findMarker(path.join(inboxDir, "..", "processed"), re) !== null;
 }
 
+// Returns in-page evaluation snippet that detects and dismisses validation errors,
+// cookie banners, and stuck prescreener continue buttons.
+export function getStallModalScript() {
+  return `(() => {
+    function isVisible(el) {
+      if (!el) return false;
+      if (typeof el.checkVisibility === "function") {
+        try { if (!el.checkVisibility()) return false; } catch {}
+      }
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) {
+        return false;
+      }
+      const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 1, height: 1 };
+      return (rect.width > 0 && rect.height > 0) || (el.offsetWidth > 0 || el.offsetHeight > 0);
+    }
+
+    function getText(el) {
+      return (el.innerText || el.textContent || "").trim();
+    }
+
+    // 1. Validation Error Modals / Banners
+    const validationSelectors = [
+      ".validation-error",
+      "[class*='validation-error']",
+      "[id*='validation-error']",
+      "[role='alertdialog']",
+      "[role='alert']",
+      ".error-message",
+      ".error-modal"
+    ];
+
+    let validationEl = null;
+    for (const sel of validationSelectors) {
+      try {
+        const found = Array.from(document.querySelectorAll(sel)).find(isVisible);
+        if (found) {
+          validationEl = found;
+          break;
+        }
+      } catch {}
+    }
+
+    if (!validationEl) {
+      const candidates = Array.from(document.querySelectorAll("div, p, span, h1, h2, h3, h4, h5, h6, strong, em, b"));
+      for (const el of candidates) {
+        if (!isVisible(el)) continue;
+        const text = getText(el);
+        if (/missing answer/i.test(text) || /please answer this question/i.test(text) || /please answer/i.test(text)) {
+          if (!el.children || el.children.length <= 2) {
+            validationEl = el;
+            break;
+          }
+        }
+      }
+    }
+
+    if (validationEl) {
+      const container = (typeof validationEl.closest === "function" ?
+        validationEl.closest("[role='dialog'], [role='alertdialog'], .modal, .modal-dialog, .modal-box, .alert-dialog, body") : null) || document;
+      const btnCandidates = Array.from(container.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit'], a.btn, .close, [aria-label*='Close' i]"));
+
+      let dismissBtn = null;
+      for (const b of btnCandidates) {
+        if (!isVisible(b)) continue;
+        const bText = getText(b);
+        const aria = (b.getAttribute("aria-label") || "").toLowerCase();
+        if (/^(ok|dismiss|close|got it|continue|understand|i understand)$/i.test(bText) ||
+            aria.includes("close") || aria.includes("dismiss")) {
+          dismissBtn = b;
+          break;
+        }
+      }
+      if (!dismissBtn && btnCandidates.length > 0) {
+        dismissBtn = btnCandidates.find(isVisible) || null;
+      }
+
+      if (dismissBtn) {
+        dismissBtn.click();
+        return { detected: true, type: "validation_error", actionTaken: "dismiss_modal" };
+      }
+
+      if (typeof validationEl.click === "function") {
+        validationEl.click();
+        return { detected: true, type: "validation_error", actionTaken: "dismiss_modal" };
+      }
+      return { detected: true, type: "validation_error", actionTaken: "detected" };
+    }
+
+    // 2. Cookie Banners & Dialog Overlays
+    const oneTrustBtn = document.querySelector("#onetrust-accept-btn-handler");
+    if (oneTrustBtn && isVisible(oneTrustBtn)) {
+      oneTrustBtn.click();
+      return { detected: true, type: "cookie_banner", actionTaken: "clicked_onetrust_accept" };
+    }
+
+    const closeButtons = Array.from(document.querySelectorAll("button[aria-label='Close' i], [aria-label='Close' i], button.close, [data-dismiss='modal']"));
+    for (const cb of closeButtons) {
+      if (isVisible(cb)) {
+        cb.click();
+        return { detected: true, type: "dialog_overlay", actionTaken: "clicked_close" };
+      }
+    }
+
+    const allButtons = Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit'], a"));
+    for (const btn of allButtons) {
+      if (!isVisible(btn)) continue;
+      const text = getText(btn);
+      if (/accept all/i.test(text) || /accept cookies/i.test(text) || /allow all/i.test(text) || /i agree/i.test(text)) {
+        btn.click();
+        return { detected: true, type: "cookie_banner", actionTaken: "clicked_accept_all" };
+      }
+    }
+
+    // 3. Stuck Prescreener Continue Buttons
+    const continueSelectors = [
+      ".continue-btn",
+      "button.continue-btn",
+      "a.continue-btn",
+      "input[value='Continue' i]",
+      "button.next-btn",
+      ".next-btn"
+    ];
+
+    for (const sel of continueSelectors) {
+      try {
+        const btn = Array.from(document.querySelectorAll(sel)).find(isVisible);
+        if (btn) {
+          btn.click();
+          const actionTaken = (sel.includes("next") || (btn.className && String(btn.className).includes("next"))) ? "clicked_next" : "clicked_continue";
+          return { detected: true, type: "prescreener_continue", actionTaken };
+        }
+      } catch {}
+    }
+
+    for (const btn of allButtons) {
+      if (!isVisible(btn)) continue;
+      const text = getText(btn);
+      if (/^continue$/i.test(text)) {
+        btn.click();
+        return { detected: true, type: "prescreener_continue", actionTaken: "clicked_continue" };
+      }
+    }
+
+    return { detected: false };
+  })()`;
+}
+
+// Bounded CDP WebSocket evaluation fallback when cdpEvaluate is not injected.
+async function cdpEvaluateOverWebSocket(port, host = "127.0.0.1", script, timeoutMs = 5000) {
+  try {
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), timeoutMs);
+    const res = await fetch(`http://${host}:${port}/cdp/json`, { signal: ac.signal });
+    clearTimeout(to);
+    if (!res.ok) return { detected: false };
+    const list = await res.json();
+    if (!Array.isArray(list) || list.length === 0) return { detected: false };
+
+    const target = list.find((t) => t && t.type === "page" && /^https?:\/\//i.test(String(t.url))) ||
+                   list.find((t) => t && t.type === "page") ||
+                   list[0];
+    if (!target || !target.webSocketDebuggerUrl) return { detected: false };
+
+    const WS = globalThis.WebSocket;
+    if (!WS) return { detected: false };
+
+    const wsUrl = String(target.webSocketDebuggerUrl).replace(/ws:\/\/[^/]+/, `ws://${host}:${port}/cdp`);
+    const ws = new WS(wsUrl);
+
+    return await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch {}
+        resolve({ detected: false });
+      }, timeoutMs);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        try { ws.close(); } catch {}
+      };
+
+      const onMessage = (event) => {
+        try {
+          const raw = typeof event.data === "string" ? event.data : event.toString();
+          const msg = JSON.parse(raw);
+          if (msg.id === 1001) {
+            cleanup();
+            const val = msg.result?.result?.value;
+            resolve(val && typeof val === "object" ? val : { detected: false });
+          }
+        } catch {
+          cleanup();
+          resolve({ detected: false });
+        }
+      };
+
+      if (typeof ws.addEventListener === "function") {
+        ws.addEventListener("message", onMessage);
+        ws.addEventListener("error", () => { cleanup(); resolve({ detected: false }); });
+        ws.addEventListener("open", () => {
+          ws.send(JSON.stringify({
+            id: 1001,
+            method: "Runtime.evaluate",
+            params: { expression: script, returnByValue: true, awaitPromise: true }
+          }));
+        });
+      } else if (typeof ws.on === "function") {
+        ws.on("message", (data) => onMessage({ data }));
+        ws.on("error", () => { cleanup(); resolve({ detected: false }); });
+        ws.on("open", () => {
+          ws.send(JSON.stringify({
+            id: 1001,
+            method: "Runtime.evaluate",
+            params: { expression: script, returnByValue: true, awaitPromise: true }
+          }));
+        });
+      } else {
+        cleanup();
+        resolve({ detected: false });
+      }
+    });
+  } catch {
+    return { detected: false };
+  }
+}
+
+/**
+ * Detects and dismisses stall modals, validation errors, cookie banners,
+ * and stuck prescreener continue buttons on the page.
+ *
+ * @param {number|Object} portOrOpts
+ * @param {Object} [maybeOpts]
+ * @returns {Promise<{ detected: boolean, type?: string, actionTaken?: string }>}
+ */
+export async function detectAndDismissStallModals(portOrOpts, maybeOpts = {}) {
+  let port;
+  let opts;
+  if (typeof portOrOpts === "object" && portOrOpts !== null) {
+    port = portOrOpts.port;
+    opts = portOrOpts;
+  } else {
+    port = portOrOpts;
+    opts = maybeOpts || {};
+  }
+  const { cdpEvaluate, host = "127.0.0.1" } = opts;
+  const script = getStallModalScript();
+
+  let rawResult;
+  try {
+    if (typeof cdpEvaluate === "function") {
+      rawResult = await cdpEvaluate(script);
+    } else {
+      rawResult = await cdpEvaluateOverWebSocket(port, host, script);
+    }
+  } catch {
+    return { detected: false };
+  }
+
+  let result = rawResult;
+  if (result && typeof result === "object") {
+    if (result.result && typeof result.result.value === "object") {
+      result = result.result.value;
+    } else if (result.value && typeof result.value === "object") {
+      result = result.value;
+    }
+  }
+
+  if (result && result.detected) {
+    return {
+      detected: true,
+      type: String(result.type || "modal"),
+      actionTaken: String(result.actionTaken || "dismissed"),
+    };
+  }
+
+  return { detected: false };
+}
+
 function iso(ms) {
   return new Date(ms).toISOString();
 }
@@ -278,6 +556,37 @@ export function createAutoFixer(opts) {
       if (res.ok) {
         if (res.state === "healthy") out.healthy.push(item.port);
         else out.repaired.push(item.port);
+
+        // For active ports that are alive, detect and dismiss stall modals / prescreener continue buttons
+        let alive = false;
+        try {
+          alive = probes.isPortAlive(item.port, psLinesCache);
+        } catch {}
+        if (alive && !targetReached(item)) {
+          try {
+            const unstuckFn = opts.detectAndDismissStallModals || probes.detectAndDismissStallModals || detectAndDismissStallModals;
+            const evalFn = opts.cdpEvaluate || probes.cdpEvaluate;
+            const modalRes = await unstuckFn(item.port, { cdpEvaluate: evalFn });
+            if (modalRes && modalRes.detected) {
+              logLine({
+                port: item.port,
+                container: item.container,
+                event: "autofix_modal_unstuck",
+                type: modalRes.type,
+                actionTaken: modalRes.actionTaken,
+              });
+              if (!out.unstuck) out.unstuck = [];
+              out.unstuck.push({ port: item.port, ...modalRes });
+            }
+          } catch (e) {
+            logLine({
+              port: item.port,
+              container: item.container,
+              event: "autofix_modal_unstuck_error",
+              error: String(e && e.message || e),
+            });
+          }
+        }
       } else {
         out.failed.push(item.port);
       }
