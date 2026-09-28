@@ -43,7 +43,9 @@ const ROOT = process.env.SURVEY_ROOT || path.resolve(__dirname, "..");
 // The orchestrator plugin lives under the user's home (~/.dsh/...). Resolve it from
 // $HOME so this works on any machine; override with DSH_ORCHESTRATOR if relocated.
 const ORCH_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
-const { FLEET, deployAgent, ensureFleetRunning, isContainerRunning, checkCdp, relaunchChromium } = await import(ORCH_PATH);
+const { FLEET: rawFleet, deployAgent, ensureFleetRunning, isContainerRunning, checkCdp, relaunchChromium } = await import(ORCH_PATH);
+const ACTIVE_PORTS = new Set([3013, 3014]);
+export const FLEET = rawFleet.filter((f) => ACTIVE_PORTS.has(f.port));
 const LOGS_DIR = path.join(ROOT, "logs");
 const INBOX = path.join(ROOT, "reports", "inbox");
 const PROCESSED = path.join(ROOT, "reports", "processed");
@@ -112,6 +114,10 @@ export const restarts = new Map(); // port -> [timestamp ms, ...]
 export const pausedPorts = new Map(); // port -> { pausedAt: number, resumeAt: number, status: "repair_pending" }
 export const targetPorts = new Set(); // target-reached marker found: never restart again
 export const idleTodayPorts = new Set(); // idle-today marker found: no surveys for today
+export const idleCooldowns = new Map(); // port -> { pausedAt: number, resumeAt: number, cooldownMs: number }
+export let standbyActive = false;
+export const IDLE_COOLDOWN_MS = Number(process.env.AGENT_IDLE_COOLDOWN_MS) || 15 * 60 * 1000; // 15 min default
+export const STANDBY_DELAY_MS = Number(process.env.SUPERVISOR_STANDBY_DELAY_MS) || 15 * 60 * 1000; // 15 min default
 export const agentStartTimes = new Map(); // port -> timestamp ms of last deploy/start
 export const fastCrashCounts = new Map(); // port -> consecutive fast crash count
 
@@ -464,30 +470,46 @@ export function getAgentStartTime(port, { logsDir = LOGS_DIR } = {}) {
 }
 
 // Check if all ports in FLEET have reached a terminal condition (target reached, idle today, or paused with 0 alive)
-export function isFleetTerminal({ targetPorts: t = targetPorts, idleTodayPorts: i = idleTodayPorts, pausedPorts: p = pausedPorts, alivePorts = [] } = {}) {
-  const allCompletedOrIdle = FLEET.every((item) => t.has(item.port) || i.has(item.port));
+export function isFleetTerminal({
+  targetPorts: t = targetPorts,
+  idleTodayPorts: i = idleTodayPorts,
+  pausedPorts: p = pausedPorts,
+  idleCooldowns: c = idleCooldowns,
+  alivePorts = [],
+  fleet = FLEET,
+} = {}) {
+  if (alivePorts.length > 0) return false;
+  const allCompletedOrIdle = fleet.every((item) => t.has(item.port) || i.has(item.port) || (c && c.has(item.port)));
   if (allCompletedOrIdle) return true;
 
-  const allTerminal = FLEET.every((item) => t.has(item.port) || i.has(item.port) || p.has(item.port));
-  return allTerminal && alivePorts.length === 0;
+  const allTerminal = fleet.every((item) => t.has(item.port) || i.has(item.port) || p.has(item.port) || (c && c.has(item.port)));
+  return allTerminal;
 }
 
-// --- idle timeout: terminate agents that haven't earned in 1 hour & write idle-today marker ---
+// --- idle timeout: terminate agents that haven't earned in 1 hour & record 15m cooldown (or write idle-today marker for legacy) ---
 export function checkIdleTimeouts(psLines, options = {}) {
   const now = options.now || Date.now();
   const logsDir = options.logsDir || LOGS_DIR;
   const inboxDir = options.inboxDir || INBOX;
   const processedDir = options.processedDir || PROCESSED;
   const idleTimeoutMs = options.idleTimeoutMs || IDLE_TIMEOUT_MS;
+  const useCooldown = options.useCooldown !== undefined ? options.useCooldown : !options.inboxDir;
+  const cooldownMs = options.cooldownMs || IDLE_COOLDOWN_MS;
   const terminated = [];
 
   for (const item of FLEET) {
     const port = item.port;
 
-    // Skip ports that are paused, completed, already marked idle today, or not running
+    // Skip ports that are paused, completed, already marked idle today, or currently in cooldown
     if (pausedPorts.has(port)) continue;
     if (targetPorts.has(port)) continue;
     if (idleTodayPorts.has(port)) continue;
+    if (idleCooldowns.has(port)) {
+      const cd = idleCooldowns.get(port);
+      const resumeAt = typeof cd === "object" ? cd.resumeAt : cd;
+      if (now < resumeAt) continue;
+      idleCooldowns.delete(port);
+    }
     if (!isPortAlive(port, psLines)) continue;
 
     let startedMs = getAgentStartTime(port, { logsDir });
@@ -508,40 +530,65 @@ export function checkIdleTimeouts(psLines, options = {}) {
 
     if (idleMs > idleTimeoutMs) {
       const idleMinutes = Math.round(idleMs / 60000);
-      appendSupervisorLog({
-        ts: iso(),
-        port,
-        action: "idle_timeout_terminate",
-        idle_minutes: idleMinutes,
-        note: `Agent terminated: no earnings activity for ${idleMinutes} minutes (threshold: ${Math.round(idleTimeoutMs / 60000)} min); marked idle today`,
-      });
 
-      // 1. Write the idle_today marker so supervisor never restarts this port today
-      const today = new Date(now);
-      const yyyymmdd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-      const markerPath = path.join(inboxDir, `${port}_idle_today_${yyyymmdd}.json`);
-      try {
-        fs.writeFileSync(markerPath, JSON.stringify({
+      if (useCooldown) {
+        // Temporary 15m cooldown: do not write permanent idle_today marker or add to idleTodayPorts
+        const resumeAt = now + cooldownMs;
+        idleCooldowns.set(port, { pausedAt: now, resumeAt, cooldownMs });
+        appendSupervisorLog({
+          ts: iso(),
           port,
-          ts: today.toISOString(),
-          type: "idle_today",
-          reason: `idle_timeout: no earnings for ${idleMinutes} minutes`,
-          date: yyyymmdd,
-        }, null, 2) + "\n", "utf-8");
-        appendSupervisorLog({ ts: iso(), port, action: "wrote_idle_today_marker", marker: markerPath });
-      } catch (e) {
-        appendSupervisorLog({ ts: iso(), port, action: "write_idle_today_marker_failed", error: String(e) });
-      }
+          action: "idle_cooldown",
+          idle_minutes: idleMinutes,
+          cooldown_minutes: Math.round(cooldownMs / 60000),
+          resume_at: new Date(resumeAt).toISOString(),
+          note: `Agent terminated: no earnings activity for ${idleMinutes} minutes; placed in ${Math.round(cooldownMs / 60000)}m cooldown`,
+        });
 
-      // 2. Add to idleTodayPorts in-memory set to prevent immediate redeployment
-      idleTodayPorts.add(port);
+        // Kill the agent process so it can rest and recover
+        try {
+          execSync(`pkill -f "${driverKillPattern(port)}" || true`);
+          publishSupervisorEvent("idle_timeout_cooldown", `port ${port} idle for ${idleMinutes}m; entered ${Math.round(cooldownMs / 60000)}m cooldown`, { port, idleMinutes, cooldownMs });
+        } catch (e) {
+          appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
+        }
+      } else {
+        // Legacy behavior: write idle_today marker and add to idleTodayPorts
+        appendSupervisorLog({
+          ts: iso(),
+          port,
+          action: "idle_timeout_terminate",
+          idle_minutes: idleMinutes,
+          note: `Agent terminated: no earnings activity for ${idleMinutes} minutes (threshold: ${Math.round(idleTimeoutMs / 60000)} min); marked idle today`,
+        });
 
-      // 3. Kill the agent process
-      try {
-        execSync(`pkill -f "${driverKillPattern(port)}" || true`);
-        publishSupervisorEvent("idle_timeout_terminate", `port ${port} terminated: no earnings for ${idleMinutes}m; marked idle today`, { port, idleMinutes });
-      } catch (e) {
-        appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
+        // 1. Write the idle_today marker so supervisor never restarts this port today
+        const today = new Date(now);
+        const yyyymmdd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+        const markerPath = path.join(inboxDir, `${port}_idle_today_${yyyymmdd}.json`);
+        try {
+          fs.writeFileSync(markerPath, JSON.stringify({
+            port,
+            ts: today.toISOString(),
+            type: "idle_today",
+            reason: `idle_timeout: no earnings for ${idleMinutes} minutes`,
+            date: yyyymmdd,
+          }, null, 2) + "\n", "utf-8");
+          appendSupervisorLog({ ts: iso(), port, action: "wrote_idle_today_marker", marker: markerPath });
+        } catch (e) {
+          appendSupervisorLog({ ts: iso(), port, action: "write_idle_today_marker_failed", error: String(e) });
+        }
+
+        // 2. Add to idleTodayPorts in-memory set to prevent immediate redeployment
+        idleTodayPorts.add(port);
+
+        // 3. Kill the agent process
+        try {
+          execSync(`pkill -f "${driverKillPattern(port)}" || true`);
+          publishSupervisorEvent("idle_timeout_terminate", `port ${port} terminated: no earnings for ${idleMinutes}m; marked idle today`, { port, idleMinutes });
+        } catch (e) {
+          appendSupervisorLog({ ts: iso(), port, action: "idle_kill_failed", error: String(e) });
+        }
       }
 
       terminated.push(port);
@@ -551,7 +598,7 @@ export function checkIdleTimeouts(psLines, options = {}) {
 }
 
 // --- one tick: check every FLEET port in ascending order ---
-export async function tick() {
+export async function tick(options = {}) {
   const alivePorts = [];
   const restartedPorts = [];
   publishSupervisorEvent("tick_started", "supervisor tick started; checking fleet");
@@ -621,7 +668,7 @@ export async function tick() {
     const psLines = execSync("ps -eo pid,args", { encoding: "utf8" }).split("\n");
 
     // Check for idle agents that haven't earned in 1 hour — terminate them to save Codex budget
-    checkIdleTimeouts(psLines);
+    checkIdleTimeouts(psLines, { useCooldown: true });
 
     // Check for agents stuck on authentication screens — terminate after 30 minutes
     checkAuthTimeouts(psLines);
@@ -741,6 +788,26 @@ export async function tick() {
         restarts.set(port, []);
       }
 
+      if (idleCooldowns.has(port)) {
+        const cd = idleCooldowns.get(port);
+        const resumeAt = typeof cd === "object" ? cd.resumeAt : cd;
+        if (now < resumeAt) {
+          // Still in 15-minute idle cooldown period; skip redeployment
+          continue;
+        }
+        // Cooldown elapsed: clear idle cooldown and allow redeployment
+        idleCooldowns.delete(port);
+        const resumeTs = iso();
+        appendSupervisorLog({
+          ts: resumeTs,
+          port,
+          action: "idle_cooldown_resumed",
+          status: "resuming",
+          note: "idle cooldown elapsed; resuming deployment",
+        });
+        publishSupervisorEvent("idle_cooldown_resumed", `port ${port} idle cooldown elapsed; resuming deployment`, { port });
+      }
+
       // Fast-crash guard: if this agent was deployed very recently (< 25s ago)
       // and is already dead, track fast crashes and pause port on repeated fast crashes.
       const startTime = agentStartTimes.get(port);
@@ -802,21 +869,33 @@ export async function tick() {
       }
     }
 
-    // (d) Check if all ports have reached a terminal state (target reached, idle today, or paused with 0 alive)
-    if (isFleetTerminal({ targetPorts, idleTodayPorts, pausedPorts, alivePorts })) {
+    // (d) Check if all ports have reached a terminal state (target reached, idle today, paused, or in idle cooldown with 0 alive)
+    if (isFleetTerminal({ targetPorts, idleTodayPorts, pausedPorts, idleCooldowns, alivePorts })) {
+      standbyActive = true;
       appendSupervisorLog({
         ts: iso(),
-        event: "fleet_all_terminal",
-        note: `All ${FLEET.length} ports terminal (${targetPorts.size} target reached, ${idleTodayPorts.size} idle today, ${pausedPorts.size} paused). Exiting supervisor cleanly.`,
+        event: "fleet_standby",
+        note: `All ${FLEET.length} ports terminal or in cooldown (${targetPorts.size} target reached, ${idleTodayPorts.size} idle today, ${pausedPorts.size} paused, ${idleCooldowns.size} in cooldown). Supervisor entering standby state.`,
       });
-      publishSupervisorEvent("fleet_completed", "All fleet agents reached terminal state for today; supervisor shutting down cleanly");
+      publishSupervisorEvent("fleet_standby", "All fleet agents reached terminal or idle state; supervisor entering standby", {
+        targetPorts: Array.from(targetPorts),
+        idleTodayPorts: Array.from(idleTodayPorts),
+        pausedPorts: Array.from(pausedPorts.keys()),
+        idleCooldowns: Array.from(idleCooldowns.keys()),
+      });
       try {
         syncEarnings({ dailyHeartbeat: true });
       } catch (e) {
-        appendSupervisorLog({ ts: iso(), event: "final_sync_earnings_failed", error: String(e) });
+        appendSupervisorLog({ ts: iso(), event: "standby_sync_earnings_failed", error: String(e) });
       }
-      await shutdown();
+      console.log(`[${iso()}] All fleet ports terminal/idle. Entering standby state (sleeping 15m)...`);
+      const delay = options?.standbyDelayMs !== undefined ? options.standbyDelayMs : STANDBY_DELAY_MS;
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
       return;
+    } else {
+      standbyActive = false;
     }
   } catch (e) {
     // One bad tick never kills the loop.
