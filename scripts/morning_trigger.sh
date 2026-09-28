@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -eo pipefail
+# DISABLED: Automated morning trigger disabled by operator.
+exit 0
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 # Keep $HOME portable: only set it if the environment didn't already provide one.

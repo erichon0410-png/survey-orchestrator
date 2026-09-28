@@ -35,23 +35,32 @@ const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_CDP_WAIT_MS = 15_000;
 const DEFAULT_CDP_POLL_MS = 2_000;
 
-// Find a marker file matching a regex in the inbox or processed directories.
+// Find a marker file matching a regex in the inbox or its archived processed tree.
 function findMarker(baseDir, re) {
-  const dirs = [baseDir, path.join(baseDir, "..", "processed")];
-  for (const dir of dirs) {
-    try {
-      for (const name of fs.readdirSync(dir)) {
-        if (re.test(name)) return path.join(dir, name);
+  try {
+    for (const name of fs.readdirSync(baseDir)) {
+      const markerPath = path.join(baseDir, name);
+      let stat;
+      try {
+        stat = fs.statSync(markerPath);
+      } catch {
+        continue;
       }
-    } catch {}
-  }
+      if (stat.isDirectory()) {
+        const nested = findMarker(markerPath, re);
+        if (nested) return nested;
+      } else if (re.test(name)) {
+        return markerPath;
+      }
+    }
+  } catch {}
   return null;
 }
 
 // Check if an idle-today marker exists for the given port.
 function hasIdleTodayMarker(port, inboxDir) {
   const re = new RegExp(`^${port}_idle_today_.*\\.json$`);
-  return findMarker(inboxDir, re) !== null;
+  return findMarker(inboxDir, re) !== null || findMarker(path.join(inboxDir, "..", "processed"), re) !== null;
 }
 
 function iso(ms) {
