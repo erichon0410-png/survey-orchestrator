@@ -328,4 +328,52 @@ console.log("[test] 6. tryExecuteFastPath standalone port invocation over CDP se
   }
 }
 
+
+console.log("[test] 7. tryExecuteFastPath neural Laya decision integration");
+{
+  const mockElements = [
+    { role: "radio", label: "I rent an apartment", x: 100, y: 200, w: 20, h: 20, isSubmitOrNext: false },
+    { role: "radio", label: "I own a single-family home", x: 100, y: 240, w: 20, h: 20, isSubmitOrNext: false },
+    { role: "radio", label: "I live with parents", x: 100, y: 280, w: 20, h: 20, isSubmitOrNext: false },
+    { role: "button", label: "Next", x: 200, y: 350, w: 80, h: 30, isSubmitOrNext: true }
+  ];
+
+  const mockSend = async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      return { result: { value: mockElements } };
+    }
+    return {};
+  };
+
+  // Mock neural fetchFn for deterministic offline testing
+  const mockFetchFn = async () => ({
+    model: "laya-english",
+    answers: {
+      survey_question: {
+        type: "choice",
+        choice: "I own a single-family home",
+        confidence: 0.92,
+        probabilities: {
+          "I rent an apartment": 0.05,
+          "I own a single-family home": 0.92,
+          "I live with parents": 0.03
+        }
+      }
+    }
+  });
+
+  const res = await tryExecuteFastPath(3013, {
+    send: mockSend,
+    sleepFn: async () => {},
+    useNeuralLaya: true,
+    fetchFn: mockFetchFn,
+  });
+
+  assert.equal(res.handled, true, "neural Laya handled the question");
+  assert.equal(res.optionClicked, "I own a single-family home");
+  assert.equal(res.nextClicked, true);
+  assert.ok(res.decision.reason.includes("unsloth_laya_neural"));
+}
+
 console.log("PASS: test_system1_runner");
+

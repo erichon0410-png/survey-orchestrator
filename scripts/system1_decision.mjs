@@ -657,3 +657,135 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
 
   return { canHandle: false, reason: "needs_system2" };
 }
+
+
+// ---------- Neural Laya (Unsloth Studio /v1/systemone) Integration ----------
+
+/**
+ * Formats persona into a compact state string for Laya encoder context.
+ *
+ * @param {Object} [persona=MEI_LIN_CHEN_PERSONA]
+ * @returns {string}
+ */
+export function formatPersonaState(persona = MEI_LIN_CHEN_PERSONA) {
+  const p = persona || MEI_LIN_CHEN_PERSONA;
+  const childStr = Array.isArray(p.children) ? p.children.join("; ") : (p.children || "none");
+  return `Respondent profile: Name: ${p.name || p.alias_name}. Age: ${p.age}. Gender: ${p.gender}. Race: ${p.race}. Location: ${p.location?.city || "Columbus"}, ${p.location?.state || "Ohio"} ${p.location?.zip || "43065"}. Marital Status: ${p.marital_status}. Children: ${childStr}. Education: ${p.education}. Occupation: ${p.occupation?.status}, ${p.occupation?.field}, ${p.occupation?.role}. Household Income: ${p.household_income}. Politics: ${p.politics?.registration}, ${p.politics?.leaning}. Homeownership: ${p.homeownership}. Views: Spanking (${p.views?.spanking || "against"}), Data centers (${p.views?.data_center_oversight || "supports"}), Firearms (${p.views?.firearms_at_home || "none"}).`;
+}
+
+/**
+ * Queries Unsloth Studio /v1/systemone endpoint running Laya.
+ *
+ * @param {string} state - Context/state description
+ * @param {Object} questions - Mapping of question_id -> QuestionIn
+ * @param {Object} [options={}] - Config overrides (endpoint, apiKey, model, timeoutMs)
+ * @returns {Promise<Object>}
+ */
+export async function queryUnslothSystemOne(state, questions, options = {}) {
+  const endpoint = options.endpoint || process.env.UNSLOTH_STUDIO_SYSTEMONE_URL || "http://tank.tail576f3e.ts.net:8888/v1/systemone";
+  const apiKey = options.apiKey || process.env.UNSLOTH_STUDIO_API_KEY || "sk-unsloth-3806b3388ca2c8f925f8a2a7aeb78445";
+  const model = options.model || process.env.UNSLOTH_SYSTEMONE_MODEL || "laya-english";
+  const timeoutMs = options.timeoutMs ?? 5000;
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      state,
+      questions,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`Unsloth SystemOne HTTP ${res.status}: ${errorText}`);
+  }
+
+  return await res.json();
+}
+
+/**
+ * Evaluates candidate controls using the live Laya neural model served by Unsloth Studio.
+ *
+ * @param {Array|Object} harvested - Controls array or harvestControls() output
+ * @param {Object} [persona=MEI_LIN_CHEN_PERSONA] - Respondent profile
+ * @param {Object} [options={}] - Overrides and options
+ * @returns {Promise<Object>}
+ */
+export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_PERSONA, options = {}) {
+  const controls = Array.isArray(harvested) ? harvested : harvested?.controls || [];
+  const questionText = typeof harvested?.question === "string" ? harvested.question : (options.questionText || "");
+
+  if (!controls || controls.length === 0) return { canHandle: false };
+
+  // Filter for actionable option controls
+  const actionable = controls.filter(
+    (c) =>
+      !c.isSubmitOrNext &&
+      (c.role === "radio" || c.type === "radio" || c.role === "option")
+  );
+
+  if (actionable.length === 0) return { canHandle: false };
+
+  // Freeform unhandled text fields still require System 2
+  const hasUnhandledText = controls.some((c) => {
+    const isTextArea = c.tag === "textarea" || c.role === "textbox";
+    return isTextArea && !c.isSubmitOrNext;
+  });
+  if (hasUnhandledText) return { canHandle: false, reason: "needs_system2" };
+
+  try {
+    const state = formatPersonaState(persona);
+    const criteriaObj = {};
+    for (const c of actionable) {
+      const lbl = (c.label || c.value || "Option").trim();
+      criteriaObj[lbl] = lbl;
+    }
+
+    const payloadQuestions = {
+      survey_question: {
+        type: "choice",
+        instructions: questionText || "Select the best option matching the respondent profile.",
+        criteria: criteriaObj,
+      },
+    };
+
+    const fetchFn = options.fetchFn || queryUnslothSystemOne;
+    const result = await fetchFn(state, payloadQuestions, options);
+    const answer = result?.answers?.survey_question;
+    if (!answer || answer.type !== "choice" || !answer.choice) {
+      return { canHandle: false, reason: "laya_no_choice" };
+    }
+
+    // Match chosen label back to actionable control
+    const chosenIndex = actionable.findIndex(
+      (c) => (c.label || c.value || "").trim() === answer.choice.trim()
+    );
+
+    if (chosenIndex === -1) {
+      return { canHandle: false, reason: "laya_unmatched_choice" };
+    }
+
+    const choiceProb = answer.probabilities?.[answer.choice] ?? answer.confidence ?? 0.85;
+    const minProb = options.minProbability ?? 0.45;
+    if (choiceProb < minProb) {
+      return { canHandle: false, reason: "laya_low_confidence", probability: choiceProb };
+    }
+
+    return {
+      canHandle: true,
+      type: "choice",
+      targetControl: actionable[chosenIndex],
+      confidence: choiceProb,
+      reason: `unsloth_laya_neural (model: ${result.model || "laya"})`,
+      raw: answer,
+    };
+  } catch (err) {
+    return { canHandle: false, reason: `laya_error: ${err.message || String(err)}` };
+  }
+}

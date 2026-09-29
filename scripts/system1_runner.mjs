@@ -7,7 +7,7 @@
 import os from "node:os";
 import path from "node:path";
 import { harvestControls } from "./harvest_controls.mjs";
-import { evaluateControls, MEI_LIN_CHEN_PERSONA } from "./system1_decision.mjs";
+import { evaluateControls, evaluateControlsNeural, MEI_LIN_CHEN_PERSONA } from "./system1_decision.mjs";
 import { getPacingSchedule, sleep, enforcePageDwell } from "./human_pacer.mjs";
 import { stealthClick, injectVirtualCursor } from "./stealth_mouse.mjs";
 import { selectPageTarget } from "./cdp_readonly.mjs";
@@ -122,8 +122,18 @@ async function runFastPath(send, options = {}) {
     };
   }
 
-  // 2. Fast-path decision evaluation
-  const decision = evaluateControls(harvested, persona);
+  // 2. Fast-path decision evaluation (Tier 1: local heuristic <0.01ms)
+  let decision = evaluateControls(harvested, persona);
+
+  // If local heuristic cannot handle it and neural Laya is enabled (Tier 2: Unsloth Studio Laya ~100ms)
+  const enableNeuralLaya = options.useNeuralLaya ?? (process.env.SURVEY_NEURAL_LAYA === "1" || process.env.ENABLE_NEURAL_LAYA === "true");
+  if ((!decision || !decision.canHandle) && enableNeuralLaya) {
+    const neuralRes = await evaluateControlsNeural(harvested, persona, options);
+    if (neuralRes && neuralRes.canHandle) {
+      decision = neuralRes;
+    }
+  }
+
   if (!decision || !decision.canHandle) {
     return {
       handled: false,
