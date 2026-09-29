@@ -227,10 +227,21 @@ export async function stealthClick(send, target, options = {}) {
   if (typeof target === "string") {
     const res = await send("Runtime.evaluate", {
       expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(target)});
+        let el = document.querySelector(${JSON.stringify(target)});
         if (!el) return null;
+        let r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0 || r.left < 0 || r.top < 0) {
+          const parent = el.closest('.clickableCell, .fir-choice, label') || el.parentElement;
+          if (parent) {
+            const pr = parent.getBoundingClientRect();
+            if (pr.width > 0 && pr.height > 0 && pr.left >= 0 && pr.top >= 0) {
+              el = parent;
+              r = pr;
+            }
+          }
+        }
         el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
-        const r = el.getBoundingClientRect();
+        r = el.getBoundingClientRect();
         return { x: r.left, y: r.top, w: r.width, h: r.height, tag: el.tagName, text: el.innerText ? el.innerText.slice(0, 50) : "" };
       })()`,
       returnByValue: true,

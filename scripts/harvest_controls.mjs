@@ -24,7 +24,10 @@ export function getHarvestScript() {
       if (texts.length > 0) return texts.join(" ");
     }
     const parentLabel = el.closest("label");
-    if (parentLabel) return (parentLabel.innerText || parentLabel.textContent || "").trim();
+    if (parentLabel) {
+      const txt = (parentLabel.innerText || parentLabel.textContent || "").trim();
+      if (txt) return txt;
+    }
     if (el.placeholder) return el.placeholder.trim();
     if (el.value && (el.type === "submit" || el.type === "button")) return el.value.trim();
     if (el.innerText && el.innerText.trim()) return el.innerText.trim().slice(0, 100);
@@ -42,6 +45,7 @@ export function getHarvestScript() {
     if (tag === "textarea") return "textbox";
     if (tag === "input") {
       const type = (el.type || "text").toLowerCase();
+      if (type === "hidden") return "hidden";
       if (type === "radio") return "radio";
       if (type === "checkbox") return "checkbox";
       if (type === "submit" || type === "button" || type === "reset") return "button";
@@ -51,6 +55,10 @@ export function getHarvestScript() {
   }
 
   for (const el of elements) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    if (type === "hidden") continue;
+
     let isVisible = false;
     if (typeof el.checkVisibility === "function") {
       isVisible = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
@@ -58,15 +66,26 @@ export function getHarvestScript() {
       const style = window.getComputedStyle(el);
       isVisible = style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
     }
-    if (!isVisible) continue;
 
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) continue;
+    let rect = el.getBoundingClientRect();
+    // Fallback for custom checkboxes / radio buttons styled off-screen (e.g. left: -9999px) or zero-sized
+    if (!isVisible || rect.width <= 0 || rect.height <= 0 || rect.left < 0 || rect.top < 0) {
+      const parent = el.closest(".clickableCell, .fir-choice, label") || (el.parentElement && (el.role === "radio" || type === "radio" || type === "checkbox") ? el.parentElement : null);
+      if (parent) {
+        const pRect = parent.getBoundingClientRect();
+        if (pRect.width > 0 && pRect.height > 0 && pRect.left >= 0 && pRect.top >= 0) {
+          rect = pRect;
+          isVisible = true;
+        }
+      }
+    }
+    if (!isVisible) continue;
+    if (rect.width <= 0 || rect.height <= 0 || rect.left < 0) continue;
 
     const role = getRole(el);
+    if (role === "hidden") continue;
+
     const label = getLabel(el);
-    const tag = el.tagName.toLowerCase();
-    const type = (el.type || "").toLowerCase();
     const checked = !!el.checked;
     const value = el.value || "";
     const disabled = el.disabled || el.getAttribute("aria-disabled") === "true";
@@ -89,12 +108,26 @@ export function getHarvestScript() {
       h: Math.round(rect.height),
       checked,
       value,
-      selector: el.id ? \`#\${el.id}\` : (el.name ? \`\${tag}[name="\${el.name}"]\` : ""),
+      selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : ""),
       isSubmitOrNext,
     });
   }
 
-  return visibleControls;
+  function extractQuestion() {
+    const headings = Array.from(document.querySelectorAll("h1, h2, h3, [role='heading'], legend, .question-text, [class*='question'], [class*='prompt'], [class*='title']"));
+    for (const h of headings) {
+      const text = (h.innerText || h.textContent || "").trim();
+      if (text && text.length > 5 && !/^(answer|play|shop|surveys|swagbucks|welcome)/i.test(text)) {
+        return text;
+      }
+    }
+    return "";
+  }
+
+  return {
+    question: extractQuestion(),
+    controls: visibleControls
+  };
 })()`;
 }
 
@@ -118,6 +151,7 @@ export function formatControlsTable(controls) {
  *
  * @param {Function} send - CDP send function (method, params)
  * @returns {Promise<{
+ *   question: string,
  *   controls: Array,
  *   nextButton: Object|null,
  *   radios: Array,
@@ -140,7 +174,9 @@ export async function harvestControls(send) {
     );
   }
 
-  const controls = res?.result?.value || [];
+  const raw = res?.result?.value;
+  const controls = Array.isArray(raw) ? raw : (raw?.controls || []);
+  const question = typeof raw?.question === "string" ? raw.question : "";
   const nextButton = controls.find((c) => c.isSubmitOrNext) || null;
   const radios = controls.filter((c) => c.role === "radio");
   const checkboxes = controls.filter((c) => c.role === "checkbox");
@@ -148,6 +184,7 @@ export async function harvestControls(send) {
   const table = formatControlsTable(controls);
 
   return {
+    question,
     controls,
     nextButton,
     radios,

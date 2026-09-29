@@ -20,6 +20,27 @@ try {
 }
 
 /**
+ * Selects an active survey questionnaire or prescreener target from the target list,
+ * preferring questionnaire pages over account dashboards.
+ */
+export function selectSurveyTarget(targets, options = {}) {
+  if (options.target) return options.target;
+  if (!Array.isArray(targets) || targets.length === 0) return null;
+  const pages = targets.filter((t) => t && (t.type === "page" || !t.type) && /^https?:\/\//i.test(t.url));
+  if (pages.length === 0) return null;
+  if (pages.length > 1) {
+    const surveyPages = pages.filter((t) => {
+      const low = (t.url || "").toLowerCase();
+      return !low.endsWith("/surveys") && !low.endsWith("/dashboard") && (low.includes("prescreener") || low.includes("survey") || low.includes("screener"));
+    });
+    if (surveyPages.length > 0) {
+      return surveyPages[surveyPages.length - 1];
+    }
+  }
+  return selectPageTarget(targets, options);
+}
+
+/**
  * Manages a bounded CDP session over WebSocket on a selected target page.
  *
  * @param {number} port - CDP remote debugging port
@@ -42,7 +63,7 @@ export async function withCDPSession(port, options = {}, fn) {
     clearTimeout(to);
   }
 
-  const target = selectPageTarget(list, options);
+  const target = selectSurveyTarget(list, options);
   if (!target || !target.webSocketDebuggerUrl) {
     throw new Error(`No active page target found on port ${port}`);
   }
@@ -179,7 +200,16 @@ async function runFastPath(send, options = {}) {
   let nextClicked = false;
   let totalPacedMs = schedule.readingMs + schedule.preClickDwellMs + schedule.postClickDwellMs;
 
-  const nextButton = harvested.nextButton;
+  let nextButton = harvested.nextButton;
+  if (!nextButton && options.allowSubmit !== false) {
+    try {
+      const refreshed = await harvestControls(send);
+      if (refreshed?.nextButton) {
+        nextButton = refreshed.nextButton;
+      }
+    } catch {}
+  }
+
   if (nextButton && options.allowSubmit !== false) {
     if (schedule.preSubmitDwellMs > 0) {
       await sleepFn(schedule.preSubmitDwellMs);

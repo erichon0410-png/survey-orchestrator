@@ -594,14 +594,13 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
     return { canHandle: false };
   }
 
-  // Check for open-ended text areas or unhandled freeform textboxes requiring System 2
-  const hasUnhandledText = controls.some((c) => {
-    const isTextArea = c.tag === "textarea" || c.role === "textbox" && c.tag !== "input";
-    const isOpenTextbox = c.role === "textbox" && !c.isSubmitOrNext;
-    return isTextArea || isOpenTextbox;
+  // Check for open-ended text areas requiring System 2
+  const hasTextArea = controls.some((c) => {
+    const isTextArea = c.tag === "textarea" || (c.role === "textbox" && c.tag === "textarea");
+    return isTextArea && !c.isSubmitOrNext;
   });
 
-  if (hasUnhandledText) {
+  if (hasTextArea) {
     return { canHandle: false, reason: "needs_system2" };
   }
 
@@ -613,6 +612,10 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
   );
 
   if (actionable.length === 0) {
+    const hasStandaloneText = controls.some((c) => c.role === "textbox" && !c.isSubmitOrNext);
+    if (hasStandaloneText) {
+      return { canHandle: false, reason: "needs_system2" };
+    }
     return { canHandle: false };
   }
 
@@ -727,17 +730,17 @@ export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_P
   const actionable = controls.filter(
     (c) =>
       !c.isSubmitOrNext &&
-      (c.role === "radio" || c.type === "radio" || c.role === "option")
+      (c.role === "radio" || c.type === "radio" || c.role === "option" || c.role === "checkbox" || c.type === "checkbox")
   );
 
   if (actionable.length === 0) return { canHandle: false };
 
-  // Freeform unhandled text fields still require System 2
-  const hasUnhandledText = controls.some((c) => {
-    const isTextArea = c.tag === "textarea" || c.role === "textbox";
+  // Freeform unhandled textareas (open-ended essay questions) still require System 2
+  const hasTextArea = controls.some((c) => {
+    const isTextArea = c.tag === "textarea" || (c.role === "textbox" && c.tag === "textarea");
     return isTextArea && !c.isSubmitOrNext;
   });
-  if (hasUnhandledText) return { canHandle: false, reason: "needs_system2" };
+  if (hasTextArea) return { canHandle: false, reason: "needs_system2" };
 
   try {
     const state = formatPersonaState(persona);
