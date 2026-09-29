@@ -59,12 +59,11 @@ export function getHarvestScript() {
     const type = (el.type || "").toLowerCase();
     if (type === "hidden") continue;
 
-    let isVisible = false;
+    const style = window.getComputedStyle(el);
+    const cssVisible = style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+    let isVisible = cssVisible;
     if (typeof el.checkVisibility === "function") {
-      isVisible = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-    } else {
-      const style = window.getComputedStyle(el);
-      isVisible = style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+      isVisible = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || cssVisible;
     }
 
     let rect = el.getBoundingClientRect();

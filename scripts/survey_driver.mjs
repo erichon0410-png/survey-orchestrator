@@ -49,6 +49,7 @@ import { fileURLToPath } from "node:url";
 import { createEventPublisher } from "./observability_hub.mjs";
 import { normalizeCodexLine } from "./fleet_events.mjs";
 import { tryExecuteFastPath } from "./system1_runner.mjs";
+import { selectSurveyTarget } from "./system1_runner.mjs";
 
 export const ENABLE_FASTPATH = process.env.SURVEY_FASTPATH !== "0";
 
@@ -706,7 +707,7 @@ export function createDomLivenessHeartbeat({
       if (pages.length === 0) return;
 
       const httpPages = pages.filter((p) => p.url && /^https?:\/\//i.test(p.url));
-      const target = httpPages.length > 0 ? httpPages[httpPages.length - 1] : pages[pages.length - 1];
+      const target = (typeof selectSurveyTarget === "function" ? selectSurveyTarget(targets) : null) || (httpPages.length > 0 ? httpPages[httpPages.length - 1] : pages[pages.length - 1]);
       if (!target) return;
 
       const currentKey = `${target.url || ""}::${target.title || ""}`;

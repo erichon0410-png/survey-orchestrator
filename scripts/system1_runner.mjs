@@ -130,7 +130,8 @@ export async function withCDPSession(port, options = {}, fn) {
     });
 
   try {
-    return await fn(send, ws);
+    const isIframe = target?.type === "iframe";
+    return await fn(send, ws, { target, isIframe });
   } finally {
     try {
       ws.close();
@@ -212,8 +213,34 @@ async function runFastPath(send, options = {}) {
     await sleepFn(schedule.preClickDwellMs);
   }
 
-  // 6. Dispatch stealth click on chosen option
-  await stealthClick(send, targetControl);
+  // 6. Dispatch action: text entry or stealth click
+  if (decision.type === "text") {
+    const textVal = decision.textValue;
+    const sel = targetControl.selector;
+    await send("Runtime.evaluate", {
+      expression: `(() => {
+        let inp = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
+        if (!inp && ${JSON.stringify(targetControl.x)} > 0) inp = document.elementFromPoint(${targetControl.x}, ${targetControl.y});
+        if (!inp) inp = document.querySelector('input[type=text], input:not([type=hidden]):not([type=radio]):not([type=checkbox]), textarea');
+        if (!inp) return false;
+        inp.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        if (nativeSetter) nativeSetter.call(inp, ${JSON.stringify(textVal)});
+        else inp.value = ${JSON.stringify(textVal)};
+        const k = Object.keys(inp).find(x => x.startsWith('__reactProps') || x.startsWith('__reactEventHandlers'));
+        if (k && inp[k] && typeof inp[k].onChange === 'function') {
+          try { inp[k].onChange({ target: inp, currentTarget: inp, persist: () => {}, preventDefault: () => {}, stopPropagation: () => {} }); } catch {}
+        }
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        inp.dispatchEvent(new Event("change", { bubbles: true }));
+        inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        return true;
+      })()`,
+      returnByValue: true,
+    });
+  } else {
+    await stealthClick(send, targetControl, { ...options, isIframe: options.isIframe });
+  }
 
   // 7. Post-click dwell
   if (schedule.postClickDwellMs > 0) {
@@ -239,7 +266,7 @@ async function runFastPath(send, options = {}) {
       await sleepFn(schedule.preSubmitDwellMs);
       totalPacedMs += schedule.preSubmitDwellMs;
     }
-    await stealthClick(send, nextButton);
+    await stealthClick(send, nextButton, { ...options, isIframe: options.isIframe });
     nextClicked = true;
   }
 
@@ -281,11 +308,13 @@ export async function tryExecuteFastPath(port, options = {}) {
       return await runFastPath(options.send, options);
     }
 
-    return await withCDPSession(port, options, async (send) => {
-      try {
-        await injectVirtualCursor(send);
-      } catch {}
-      return await runFastPath(send, options);
+    return await withCDPSession(port, options, async (send, ws, meta) => {
+      if (!meta?.isIframe) {
+        try {
+          await injectVirtualCursor(send);
+        } catch {}
+      }
+      return await runFastPath(send, { ...options, isIframe: meta?.isIframe });
     });
   } catch (err) {
     return {

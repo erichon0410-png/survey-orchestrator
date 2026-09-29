@@ -98,8 +98,12 @@ export async function stopFleet({ timeoutMs = 1200, stopContainers = true } = {}
           process.kill(p.pid, "SIGKILL");
         } catch {}
       }
-      await new Promise((r) => setTimeout(r, 400));
-      active = getFleetProcesses();
+      const killStart = Date.now();
+      while (Date.now() - killStart < 1200) {
+        await new Promise((r) => setTimeout(r, 200));
+        active = getFleetProcesses();
+        if (active.length === 0) break;
+      }
     }
   } else {
     console.log("✓ No active supervisor, driver, or dsh processes found.");

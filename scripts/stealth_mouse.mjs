@@ -264,6 +264,34 @@ export async function stealthClick(send, target, options = {}) {
 
   const destPt = calculateJitter(targetBox, options.jitterFactor ?? 0.4);
 
+  // For OOPIF (iframe) targets, Chrome does not route Input.dispatchMouseEvent.
+  // Perform in-page click with React synthetic event fallback.
+  if (options.isIframe) {
+    const sel = typeof target === "string" ? target : target?.selector;
+    return await send("Runtime.evaluate", {
+      expression: `(() => {
+        let el = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
+        if (!el && ${JSON.stringify(destPt.x)} > 0) {
+          el = document.elementFromPoint(${destPt.x}, ${destPt.y});
+        }
+        if (el) {
+          if (el.disabled) {
+            el.disabled = false;
+            el.removeAttribute('disabled');
+          }
+          const k = Object.keys(el).find(x => x.startsWith('__reactProps') || x.startsWith('__reactEventHandlers'));
+          if (k && el[k] && typeof el[k].onClick === 'function') {
+            try { el[k].onClick({ target: el, currentTarget: el, persist: () => {}, preventDefault: () => {}, stopPropagation: () => {} }); } catch {}
+          }
+          el.click();
+          return { clicked: true, tag: el.tagName };
+        }
+        return { clicked: false };
+      })()`,
+      returnByValue: true,
+    });
+  }
+
   // 1. Move along Bézier trajectory
   await stealthMove(send, destPt, options);
 

@@ -612,16 +612,39 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
     return { canHandle: false, reason: "needs_system2" };
   }
 
-  // Filter for actionable option controls (radios, select options)
+  // Filter for actionable option controls (radios, checkboxes, select options)
   const actionable = controls.filter(
     (c) =>
       !c.isSubmitOrNext &&
-      (c.role === "radio" || c.type === "radio" || c.role === "option")
+      (c.role === "radio" || c.type === "radio" || c.role === "checkbox" || c.type === "checkbox" || c.role === "option")
   );
 
   if (actionable.length === 0) {
-    const hasStandaloneText = controls.some((c) => c.role === "textbox" && !c.isSubmitOrNext);
-    if (hasStandaloneText) {
+    const textControl = controls.find((c) => (c.role === "textbox" || c.tag === "input") && !c.isSubmitOrNext);
+    if (textControl) {
+      const qLower = (questionText || "").toLowerCase();
+      let textValue = null;
+      let reason = null;
+      if (/\b(zip|postal\s*code)\b/i.test(qLower)) {
+        textValue = persona.location?.zip || "43065";
+        reason = "Matched ZIP code demographic";
+      } else if (/\b(birth\s*year|year.*born|born in)\b/i.test(qLower)) {
+        textValue = String(persona.date_of_birth?.year || 1994);
+        reason = "Matched birth year demographic";
+      } else if (/\b(age|how old)\b/i.test(qLower)) {
+        textValue = String(persona.age || 32);
+        reason = "Matched age demographic";
+      }
+      if (textValue) {
+        return {
+          canHandle: true,
+          type: "text",
+          textValue,
+          targetControl: textControl,
+          confidence: 0.98,
+          reason,
+        };
+      }
       return { canHandle: false, reason: "needs_system2" };
     }
     return { canHandle: false };
