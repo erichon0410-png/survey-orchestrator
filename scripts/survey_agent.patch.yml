@@ -7,6 +7,26 @@
         api: openai-completions
         baseURL: !!js (process.env.UNSLOTH_STUDIO_BASE_URL || 'http://tank.tail576f3e.ts.net:8888/v1')
         models:
+          - id: ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF
+            name: Swift-Qwen3.8-27b
+            contextWindow: 110000
+            maxTokens: 8192
+            reasoningEfforts: # reasoningEfforts: off
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
+          - id: ukisai/Swift-Qwen3.8-27b
+            name: Swift-Qwen3.8-27b
+            contextWindow: 110000
+            maxTokens: 8192
+            reasoningEfforts: # reasoningEfforts: off
+              off: none
+              low: low
+              medium: medium
+              high: high
+              max: max
           - id: huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF
             name: Huihui-Qwen3.8-27b
             contextWindow: 110000

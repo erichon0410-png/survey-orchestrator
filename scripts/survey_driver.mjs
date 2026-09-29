@@ -119,7 +119,10 @@ export const MAX_TURNS = Number.isFinite(args.maxTurns) && args.maxTurns > 0
   : (Number.isFinite(Number(process.env.SURVEY_MAX_TURNS)) ? Number(process.env.SURVEY_MAX_TURNS) : 10);
 export const HARNESS = args.harness || process.env.SURVEY_HARNESS || "dsh";
 const PRESET = args.preset || process.env.SURVEY_PRESET || "survey-agent";
-const MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? (process.env.DSH_MODEL || "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF") : "stealth/union-alpha");
+const RAW_MODEL = args.model || process.env.SURVEY_MODEL || (HARNESS === "dsh" ? (process.env.DSH_MODEL || "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF") : "stealth/union-alpha");
+const MODEL = (RAW_MODEL === "ukisai/Swift-Qwen3.8-27b" || /swift.*qwen/i.test(RAW_MODEL))
+  ? "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF"
+  : RAW_MODEL;
 // Model fallback reference: Ornith-1.5-9B-Q4_K_M
 const PROVIDER = args.provider || process.env.SURVEY_MODEL_PROVIDER || (HARNESS === "dsh" ? "unsloth-studio" : "openrouter");
 const EFFORT = args.effort || process.env.SURVEY_EFFORT || "off";

@@ -731,31 +731,39 @@ export function formatPersonaState(persona = MEI_LIN_CHEN_PERSONA) {
  * @param {Object} [options={}] - Config overrides (endpoint, apiKey, model, timeoutMs)
  * @returns {Promise<Object>}
  */
+export function normalizeUnslothModel(model) {
+  if (!model) return "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF";
+  const m = String(model).trim();
+  if (/swift.*qwen/i.test(m) || m.toLowerCase() === "swift") {
+    return "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF";
+  }
+  return m;
+}
+
 export async function queryUnslothSystemOne(state, questions, options = {}) {
   const baseUrl = options.baseUrl || process.env.UNSLOTH_STUDIO_BASE_URL || "http://tank.tail576f3e.ts.net:8888";
   const apiKey = options.apiKey || process.env.UNSLOTH_STUDIO_API_KEY || "sk-unsloth-3806b3388ca2c8f925f8a2a7aeb78445";
-  const model = options.model || process.env.UNSLOTH_SYSTEMONE_MODEL || "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF";
-  const timeoutMs = options.timeoutMs ?? 8000;
+  const systemOneModel = options.systemOneModel || process.env.UNSLOTH_SYSTEMONE_MODEL || "laya-english";
+  const chatModel = normalizeUnslothModel(options.chatModel || options.model || process.env.UNSLOTH_CHAT_MODEL || "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF");
+  const timeoutMs = options.timeoutMs ?? 15000;
 
-  // Try /v1/systemone first, fall back to /v1/chat/completions
-  const systemOneUrl = options.endpoint || process.env.UNSLOTH_STUDIO_SYSTEMONE_URL || `${baseUrl}/v1/systemone`;
+  // Try /v1/systemone (Laya ~100ms ultra-fast classifier) first
+  const systemOneUrl = options.endpoint || `${baseUrl}/v1/systemone`;
   try {
     const res = await fetch(systemOneUrl, {
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, state, questions }),
-      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify({ model: systemOneModel, state, questions }),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 4000)),
     });
-    if (res.ok) return await res.json();
-    if (res.status !== 404) {
-      const errorText = await res.text().catch(() => "");
-      throw new Error(`SystemOne HTTP ${res.status}: ${errorText}`);
+    if (res.ok) {
+      return await res.json();
     }
   } catch (err) {
-    // Fall through to chat completions for 404 or connection errors
+    // Fall through to chat completions fallback
   }
 
-  // Fallback: use /v1/chat/completions with structured prompt
+  // Fallback: use /v1/chat/completions with ukisai/Swift-Qwen3.8-27b
   const questionKey = Object.keys(questions)[0] || "q";
   const q = questions[questionKey];
   const optionLabels = Object.keys(q.criteria || {});
@@ -768,13 +776,13 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
+      model: chatModel,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: 20,
-      temperature: 0.3,
+      max_tokens: 350,
+      temperature: 0.2,
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -785,21 +793,42 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
   }
 
   const chatData = await chatRes.json();
-  const rawContent = (chatData.choices?.[0]?.message?.content || chatData.choices?.[0]?.message?.reasoning_content || "").trim();
-  const numMatch = rawContent.match(/\b(\d+)\b/);
-  const chosenIdx = numMatch ? parseInt(numMatch[1], 10) - 1 : -1;
+  const msg = chatData.choices?.[0]?.message || {};
+  let rawContent = (msg.content || "").trim();
+  let chosenIdx = -1;
+
+  if (rawContent) {
+    const numMatch = rawContent.match(/\b(\d+)\b/);
+    if (numMatch) {
+      chosenIdx = parseInt(numMatch[1], 10) - 1;
+    } else {
+      const lower = rawContent.toLowerCase();
+      chosenIdx = optionLabels.findIndex(l => lower.includes(l.toLowerCase()) || l.toLowerCase().includes(lower));
+    }
+  }
+
+  if (chosenIdx < 0 && msg.reasoning_content) {
+    const rc = msg.reasoning_content;
+    const matchEnd = rc.match(/(?:output|choose|select|pick|answer|option)\s*[:=]?\s*(\d+)/i) || rc.match(/\b(\d+)\b[^\d]*$/);
+    if (matchEnd) {
+      chosenIdx = parseInt(matchEnd[1], 10) - 1;
+    }
+  }
 
   if (chosenIdx < 0 || chosenIdx >= optionLabels.length) {
-    throw new Error(`Chat response did not map to valid option: "${rawContent}"`);
+    throw new Error(`Chat response did not map to valid option: "${rawContent || msg.reasoning_content?.slice(0, 100)}"`);
   }
 
   return {
-    model: chatData.model || model,
+    model: chatData.model || chatModel,
     answers: {
       [questionKey]: {
         type: "choice",
         choice: optionLabels[chosenIdx],
-        confidence: 0.80,
+        confidence: 0.85,
+        probabilities: {
+          [optionLabels[chosenIdx]]: 0.85,
+        },
       },
     },
   };
@@ -807,11 +836,6 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
 
 /**
  * Evaluates candidate controls using the live Laya neural model served by Unsloth Studio.
- *
- * @param {Array|Object} harvested - Controls array or harvestControls() output
- * @param {Object} [persona=MEI_LIN_CHEN_PERSONA] - Respondent profile
- * @param {Object} [options={}] - Overrides and options
- * @returns {Promise<Object>}
  */
 export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_PERSONA, options = {}) {
   const controls = Array.isArray(harvested) ? harvested : harvested?.controls || [];
@@ -868,7 +892,7 @@ export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_P
     }
 
     const choiceProb = answer.probabilities?.[answer.choice] ?? answer.confidence ?? 0.85;
-    const minProb = options.minProbability ?? 0.45;
+    const minProb = options.minProbability ?? Math.max(0.25, 1.1 / actionable.length);
     if (choiceProb < minProb) {
       return { canHandle: false, reason: "laya_low_confidence", probability: choiceProb };
     }

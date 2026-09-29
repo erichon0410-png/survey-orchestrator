@@ -172,7 +172,12 @@ async function runFastPath(send, options = {}) {
   let decision = evaluateControls(harvested, persona);
 
   // If local heuristic cannot handle it and neural Laya is enabled (Tier 2: Unsloth Studio Laya ~100ms)
-  const enableNeuralLaya = options.useNeuralLaya ?? (process.env.SURVEY_NEURAL_LAYA !== "0" && process.env.ENABLE_NEURAL_LAYA !== "false");
+  const enableNeuralLaya = options.useNeuralLaya ?? (
+    options.fetchFn != null ||
+    process.env.SURVEY_NEURAL_LAYA === "1" ||
+    process.env.ENABLE_NEURAL_LAYA === "true" ||
+    (!options.send && process.env.SURVEY_NEURAL_LAYA !== "0")
+  );
   if ((!decision || !decision.canHandle) && enableNeuralLaya) {
     const neuralRes = await evaluateControlsNeural(harvested, persona, options);
     if (neuralRes && neuralRes.canHandle) {
@@ -181,6 +186,23 @@ async function runFastPath(send, options = {}) {
   }
 
   if (!decision || !decision.canHandle) {
+    // Handle interstitial/transition pages that have ONLY a next/submit button
+    const nextBtn = harvested.nextButton;
+    const actionableCount = harvested.controls?.filter((c) => !c.isSubmitOrNext).length || 0;
+    if (nextBtn && actionableCount === 0) {
+      // Pure interstitial page — just click Continue/Next after reading dwell
+      const interstitialDwell = 2000 + Math.floor(Math.random() * 2000);
+      await sleepFn(interstitialDwell);
+      await stealthClick(send, nextBtn, { ...options, isIframe: options.isIframe });
+      return {
+        handled: true,
+        action: "interstitial_advance",
+        decision: { type: "interstitial", reason: "Only submit/next button present" },
+        pacedMs: interstitialDwell,
+        optionClicked: nextBtn.label,
+        nextClicked: true,
+      };
+    }
     return {
       handled: false,
       reason: decision?.reason || "needs_system2",
