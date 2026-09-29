@@ -1,0 +1,232 @@
+// scripts/system1_runner.mjs — System 1 Fast-Path Execution Engine & CDP Integration
+//
+// Combines lightweight in-page control harvesting (<15ms), heuristic demographic decision,
+// anti-speeding human pacing regulation, and trusted Bézier mouse kinematics into a single
+// non-autoregressive execution pass.
+
+import os from "node:os";
+import path from "node:path";
+import { harvestControls } from "./harvest_controls.mjs";
+import { evaluateControls, MEI_LIN_CHEN_PERSONA } from "./system1_decision.mjs";
+import { getPacingSchedule, sleep, enforcePageDwell } from "./human_pacer.mjs";
+import { stealthClick, injectVirtualCursor } from "./stealth_mouse.mjs";
+import { selectPageTarget } from "./cdp_readonly.mjs";
+
+let WebSocket;
+try {
+  WebSocket = (await import("ws")).default;
+} catch {
+  WebSocket = (await import(path.join(os.homedir(), ".dsh", "profiles", "web", "node_modules", "ws", "index.js"))).default;
+}
+
+/**
+ * Manages a bounded CDP session over WebSocket on a selected target page.
+ *
+ * @param {number} port - CDP remote debugging port
+ * @param {Object} [options={}] - Connection options (host, timeoutMs)
+ * @param {Function} fn - Async callback receiving (send, ws)
+ * @returns {Promise<any>}
+ */
+export async function withCDPSession(port, options = {}, fn) {
+  const host = options.host || "127.0.0.1";
+  const timeoutMs = options.timeoutMs ?? 15_000;
+
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), timeoutMs);
+  let list;
+  try {
+    const res = await fetch(`http://${host}:${port}/cdp/json`, { signal: ac.signal });
+    if (!res.ok) throw new Error(`CDP /json HTTP ${res.status}`);
+    list = await res.json();
+  } finally {
+    clearTimeout(to);
+  }
+
+  const target = selectPageTarget(list, options);
+  if (!target || !target.webSocketDebuggerUrl) {
+    throw new Error(`No active page target found on port ${port}`);
+  }
+
+  const wsUrl = String(target.webSocketDebuggerUrl).replace(/ws:\/\/[^/]+/, `ws://${host}:${port}/cdp`);
+  const ws = new WebSocket(wsUrl);
+
+  await new Promise((resolve, reject) => {
+    ws.once("open", resolve);
+    ws.once("error", (e) => reject(new Error(`ws connect: ${e && e.message ? e.message : "connect error"}`)));
+    setTimeout(() => reject(new Error("ws connect timeout")), timeoutMs);
+  });
+
+  const seq = { n: 0 };
+  const send = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = ++seq.n;
+      const sendTimeout = setTimeout(() => {
+        ws.off("message", h);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, timeoutMs);
+      const h = (data) => {
+        let msg;
+        try {
+          msg = JSON.parse(data.toString());
+        } catch {
+          return;
+        }
+        if (msg.id !== id) return;
+        clearTimeout(sendTimeout);
+        ws.off("message", h);
+        if (msg.error) {
+          reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+        } else {
+          resolve(msg.result ?? {});
+        }
+      };
+      ws.on("message", h);
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+
+  try {
+    return await fn(send, ws);
+  } finally {
+    try {
+      ws.close();
+    } catch {}
+  }
+}
+
+/**
+ * Runs fast-path decision and human-paced execution on an active CDP session send function.
+ *
+ * @param {Function} send - CDP send function (method, params)
+ * @param {Object} [options={}]
+ * @returns {Promise<Object>} Execution result object
+ */
+async function runFastPath(send, options = {}) {
+  const persona = options.persona || MEI_LIN_CHEN_PERSONA;
+  const sleepFn = options.sleepFn || sleep;
+
+  // 1. Harvest in-page controls
+  let harvested;
+  try {
+    harvested = await harvestControls(send);
+  } catch (err) {
+    return {
+      handled: false,
+      reason: `harvest_error: ${err.message || String(err)}`,
+    };
+  }
+
+  if (!harvested || !Array.isArray(harvested.controls) || harvested.controls.length === 0) {
+    return {
+      handled: false,
+      reason: "no_controls",
+    };
+  }
+
+  // 2. Fast-path decision evaluation
+  const decision = evaluateControls(harvested, persona);
+  if (!decision || !decision.canHandle) {
+    return {
+      handled: false,
+      reason: decision?.reason || "needs_system2",
+    };
+  }
+
+  const targetControl = decision.targetControl;
+  if (!targetControl) {
+    return {
+      handled: false,
+      reason: "missing_target_control",
+    };
+  }
+
+  // 3. Compute pacing schedule
+  const questionText = harvested.question || harvested.questionText || targetControl.label || "";
+  const candidateOptions = harvested.radios?.length
+    ? harvested.radios
+    : harvested.controls.filter((c) => !c.isSubmitOrNext && (c.role === "radio" || c.role === "checkbox" || c.role === "option"));
+
+  const schedule = getPacingSchedule(questionText, candidateOptions, options.pacingConfig || {});
+
+  // 4. Reading delay
+  if (schedule.readingMs > 0) {
+    await sleepFn(schedule.readingMs);
+  }
+
+  // 5. Pre-click hover / deliberation dwell
+  if (schedule.preClickDwellMs > 0) {
+    await sleepFn(schedule.preClickDwellMs);
+  }
+
+  // 6. Dispatch stealth click on chosen option
+  await stealthClick(send, targetControl);
+
+  // 7. Post-click dwell
+  if (schedule.postClickDwellMs > 0) {
+    await sleepFn(schedule.postClickDwellMs);
+  }
+
+  // 8. If next button present and submission allowed, advance page
+  let nextClicked = false;
+  let totalPacedMs = schedule.readingMs + schedule.preClickDwellMs + schedule.postClickDwellMs;
+
+  const nextButton = harvested.nextButton;
+  if (nextButton && options.allowSubmit !== false) {
+    if (schedule.preSubmitDwellMs > 0) {
+      await sleepFn(schedule.preSubmitDwellMs);
+      totalPacedMs += schedule.preSubmitDwellMs;
+    }
+    await stealthClick(send, nextButton);
+    nextClicked = true;
+  }
+
+  // Optional page dwell enforcement if pageStartTime is provided
+  if (options.pageStartTime && options.minPageDwellMs) {
+    const dwellRes = await enforcePageDwell(options.pageStartTime, options.minPageDwellMs, sleepFn);
+    if (dwellRes.waited) {
+      totalPacedMs += dwellRes.remainingMs;
+    }
+  }
+
+  return {
+    handled: true,
+    action: "fastpath_completed",
+    decision,
+    pacedMs: totalPacedMs,
+    optionClicked: targetControl.label,
+    nextClicked,
+    dwellMilestones: {
+      readingMs: schedule.readingMs,
+      preClickDwellMs: schedule.preClickDwellMs,
+      postClickDwellMs: schedule.postClickDwellMs,
+      preSubmitDwellMs: schedule.preSubmitDwellMs,
+      totalDwellMs: schedule.totalDwellMs,
+    },
+  };
+}
+
+/**
+ * Attempts fast-path execution against a remote browser port or pre-connected session.
+ *
+ * @param {number} port - CDP remote port (ignored if options.send is passed)
+ * @param {Object} [options={}]
+ * @returns {Promise<Object>}
+ */
+export async function tryExecuteFastPath(port, options = {}) {
+  try {
+    if (typeof options.send === "function") {
+      return await runFastPath(options.send, options);
+    }
+
+    return await withCDPSession(port, options, async (send) => {
+      try {
+        await injectVirtualCursor(send);
+      } catch {}
+      return await runFastPath(send, options);
+    });
+  } catch (err) {
+    return {
+      handled: false,
+      reason: `cdp_connection_failed: ${err.message || String(err)}`,
+    };
+  }
+}
