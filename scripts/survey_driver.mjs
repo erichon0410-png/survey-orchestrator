@@ -48,6 +48,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createEventPublisher } from "./observability_hub.mjs";
 import { normalizeCodexLine } from "./fleet_events.mjs";
+import { tryExecuteFastPath } from "./system1_runner.mjs";
+
+export const ENABLE_FASTPATH = process.env.SURVEY_FASTPATH !== "0";
 
 export function loadEnvFiles() {
   const wsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -502,6 +505,169 @@ export async function pruneExcessTabs(port, maxTabs = 3) {
     return { closed, remaining: pages.length - closed };
   } catch (e) {
     return { closed: 0, remaining: 0, error: e.message };
+  }
+}
+
+// ---------- System 1 Fast-Path & Anti-Speeding Pacing Integration ----------
+
+/**
+ * Determines whether a given target/URL represents an active questionnaire
+ * (as opposed to a platform dashboard, account screen, blank page, or browser UI).
+ *
+ * @param {Object} target - CDP target or object with { url, title }
+ * @returns {boolean}
+ */
+export function isActiveQuestionnaire(target) {
+  if (!target || typeof target !== "object") return false;
+  const u = String(target.url || "").trim();
+  if (!u || !/^https?:\/\//i.test(u)) return false;
+
+  const lowUrl = u.toLowerCase();
+  const lowTitle = String(target.title || "").toLowerCase();
+
+  // Explicit non-questionnaire pages
+  if (lowUrl.includes("about:blank") || lowUrl.startsWith("chrome://")) {
+    return false;
+  }
+
+  // Known dashboard root / survey list pages
+  try {
+    const parsed = new URL(u);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+
+    if (host.includes("surveyjunkie.com")) {
+      if (pathname === "" || pathname === "/dashboard" || pathname === "/surveys") {
+        return false;
+      }
+    }
+    if (host.includes("swagbucks.com")) {
+      if (pathname === "" || pathname === "/surveys" || pathname === "/dashboard") {
+        return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  // Recognizable survey indicators in URL or Title
+  if (
+    lowUrl.includes("survey") ||
+    lowUrl.includes("screener") ||
+    lowUrl.includes("question") ||
+    lowUrl.includes("poll") ||
+    lowUrl.includes("samplicio") ||
+    lowUrl.includes("decipher") ||
+    lowUrl.includes("qualtrics") ||
+    lowUrl.includes("purespectrum") ||
+    lowUrl.includes("dynata") ||
+    lowUrl.includes("cint") ||
+    lowUrl.includes("surveymonkey") ||
+    lowUrl.includes("alchemer") ||
+    lowUrl.includes("spectrumsurveys") ||
+    lowTitle.includes("survey") ||
+    lowTitle.includes("questionnaire") ||
+    lowTitle.includes("research") ||
+    lowTitle.includes("study")
+  ) {
+    return true;
+  }
+
+  // Any other external http(s) page reachable in container
+  return true;
+}
+
+/**
+ * Checks if the container currently has an active questionnaire page target open in CDP.
+ *
+ * @param {number} port - Container CDP port
+ * @returns {Promise<boolean>}
+ */
+export async function isTargetPageActiveQuestionnaire(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/cdp/json`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return false;
+    const targets = await res.json();
+    if (!Array.isArray(targets) || targets.length === 0) return false;
+    const pages = targets.filter((t) => t && (t.type === "page" || !t.type) && t.url && /^https?:\/\//i.test(t.url));
+    if (pages.length === 0) return false;
+    const latest = pages[pages.length - 1];
+    if (isActiveQuestionnaire(latest)) return true;
+    return pages.some((p) => isActiveQuestionnaire(p));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempts System 1 fast-path execution against an active container port.
+ *
+ * @param {number} port - Container CDP port
+ * @param {Object} [options={}] - Options (runner, publisher, send, persona, sleepFn)
+ * @returns {Promise<{handled: boolean, reason?: string, pacedMs?: number, optionClicked?: string, nextClicked?: boolean, decision?: Object}>}
+ */
+export async function attemptFastPath(port, options = {}) {
+  try {
+    const runner = options.runner || tryExecuteFastPath;
+    const res = await runner(port, options);
+
+    if (res && res.handled) {
+      const pacedMs = res.pacedMs ?? 0;
+      const targetLabel = res.optionClicked || "option";
+
+      // Formatted action log: ACTION: system1_fastpath | TARGET: <label> | PACED_MS: <ms>
+      const logLine = `ACTION: system1_fastpath | TARGET: ${targetLabel} | PACED_MS: ${pacedMs}`;
+      if (typeof options.log === "function") {
+        options.log("info", logLine);
+      } else {
+        log("info", logLine);
+      }
+
+      // Append to agent driver log file if port is known
+      const activePort = port || PORT;
+      if (activePort) {
+        try {
+          const driverLogFile = path.join(LOGS_DIR, `agent_${activePort}_driver.log`);
+          fs.appendFileSync(driverLogFile, `[${ts()}] [driver:${activePort}] info ${logLine}\n`, "utf-8");
+        } catch {}
+      }
+
+      // Publish telemetry event: system1_fastpath_executed
+      const pub = options.publisher || getPublisher() || (activePort ? createEventPublisher({ sockPath: SOCK_PATH, port: activePort }) : null);
+      if (pub) {
+        if (typeof pub.flush === "function") {
+          try { pub.flush(); } catch {}
+        }
+        pub.publish({
+          source: "driver",
+          port: activePort,
+          event: "system1_fastpath_executed",
+          optionClicked: res.optionClicked,
+          nextClicked: !!res.nextClicked,
+          pacedMs,
+          decision: res.decision || null,
+        });
+      }
+
+      return {
+        handled: true,
+        pacedMs,
+        optionClicked: res.optionClicked,
+        nextClicked: !!res.nextClicked,
+        decision: res.decision || null,
+        ...res,
+      };
+    }
+
+    return {
+      handled: false,
+      reason: res?.reason || "unhandled",
+    };
+  } catch (err) {
+    return {
+      handled: false,
+      reason: err?.message || String(err),
+    };
   }
 }
 
@@ -1184,6 +1350,57 @@ async function main() {
       }
       finishClean(EXIT_OK);
       return;
+    }
+
+    // 2.5 Fast-Path Pre-Turn Evaluation:
+    // If fast-path is enabled and an active questionnaire is open on the container,
+    // evaluate and execute non-autoregressive responses to avoid heavy LLM turn overhead.
+    if (ENABLE_FASTPATH) {
+      try {
+        const isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+        if (isSurveyActive) {
+          log("info", `active questionnaire detected on port ${PORT}; attempting system 1 fast-path`);
+          let fastHandledCount = 0;
+          while (ENABLE_FASTPATH && (await isTargetPageActiveQuestionnaire(PORT))) {
+            const fastRes = await attemptFastPath(PORT);
+            if (!fastRes || !fastRes.handled) {
+              if (fastHandledCount === 0) {
+                log("info", `system 1 fast-path unhandled (${fastRes?.reason || "needs_system2"}); falling back to System 2`);
+              }
+              break;
+            }
+            fastHandledCount++;
+            appendStatus({
+              event: "progress",
+              note: `driver: fast-path handled question (${fastRes.optionClicked || "answered"}), paced ${fastRes.pacedMs}ms`,
+            });
+            if (targetReached()) {
+              log("info", "target_reached marker present after fast-path -> clean exit");
+              if (pub) {
+                pub.publish({
+                  source: "driver",
+                  port: PORT,
+                  event: "target_reached",
+                  message: `port ${PORT} target reached -> clean exit`,
+                });
+              }
+              finishClean(EXIT_OK);
+              return;
+            }
+            // Brief pause between questions to allow DOM transition
+            await new Promise((r) => setTimeout(r, 1200));
+          }
+          if (fastHandledCount > 0) {
+            log("info", `system 1 fast-path answered ${fastHandledCount} question(s) without launching LLM turn`);
+            if (targetReached()) {
+              finishClean(EXIT_OK);
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        log("warn", "fast-path pre-turn evaluation error", { err: String(err) });
+      }
     }
 
     let argsArr;
