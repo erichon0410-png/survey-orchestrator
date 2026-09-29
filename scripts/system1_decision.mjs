@@ -190,7 +190,7 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
   }
 
   // 2. AGE & BIRTH YEAR
-  const isBirthYearQ = /\b(birth\s*year|year.*born|born in)\b/i.test(qLower);
+  const isBirthYearQ = /\b(birth\s*year|year\s*(?:of\s*)?birth|year.*born|born\s*in)\b/i.test(qLower);
   const allYearOpts = normOpts.filter((o) => /^\b(19\d\d|20\d\d)\b/.test(o.label));
 
   if (isBirthYearQ || (allYearOpts.length >= 2 && allYearOpts.length === normOpts.length)) {
@@ -628,7 +628,7 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
       if (/\b(zip|postal\s*code)\b/i.test(qLower)) {
         textValue = persona.location?.zip || "43065";
         reason = "Matched ZIP code demographic";
-      } else if (/\b(birth\s*year|year.*born|born in)\b/i.test(qLower)) {
+      } else if (/\b(birth\s*year|year\s*(?:of\s*)?birth|year.*born|born\s*in)\b/i.test(qLower)) {
         textValue = String(persona.date_of_birth?.year || 1994);
         reason = "Matched birth year demographic";
       } else if (/\b(age|how old)\b/i.test(qLower)) {

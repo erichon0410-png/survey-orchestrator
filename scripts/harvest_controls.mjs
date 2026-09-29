@@ -89,7 +89,8 @@ export function getHarvestScript() {
     const value = el.value || "";
     const disabled = el.disabled || el.getAttribute("aria-disabled") === "true";
     const clsStr = typeof el.className === "string" ? el.className.trim() : (typeof el.className?.baseVal === "string" ? el.className.baseVal.trim() : "");
-    const isSubmitOrNext = /next|continue|submit|proceed|forward|done/i.test(label) || /next|continue|arrow/i.test(clsStr) || type === "submit";
+    const isBack = /back|prev(ious)?/i.test(label) || /back|prev/i.test(clsStr) || label === "<";
+    const isSubmitOrNext = !isBack && (/next|continue|submit|proceed|forward|done/i.test(label) || /next|continue|arrow/i.test(clsStr) || type === "submit");
 
     if (disabled) {
       if (isSubmitOrNext) {
