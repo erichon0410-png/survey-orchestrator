@@ -612,6 +612,22 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
     return { canHandle: false, reason: "needs_system2" };
   }
 
+  // Handle confirmation/consent checkboxes (e.g. "I confirm", "I agree", "I accept")
+  const confirmCheckbox = controls.find((c) =>
+    (c.role === "checkbox" || c.type === "checkbox") &&
+    !c.isSubmitOrNext &&
+    /\b(confirm|agree|accept|consent|acknowledge|certif|understand|read and)\b/i.test(c.label || "")
+  );
+  if (confirmCheckbox) {
+    return {
+      canHandle: true,
+      type: "confirm_checkbox",
+      targetControl: confirmCheckbox,
+      confidence: 0.99,
+      reason: "Consent/confirmation checkbox auto-checked",
+    };
+  }
+
   // Filter for actionable option controls (radios, checkboxes, select options)
   const actionable = controls.filter(
     (c) =>
@@ -716,31 +732,77 @@ export function formatPersonaState(persona = MEI_LIN_CHEN_PERSONA) {
  * @returns {Promise<Object>}
  */
 export async function queryUnslothSystemOne(state, questions, options = {}) {
-  const endpoint = options.endpoint || process.env.UNSLOTH_STUDIO_SYSTEMONE_URL || "http://tank.tail576f3e.ts.net:8888/v1/systemone";
+  const baseUrl = options.baseUrl || process.env.UNSLOTH_STUDIO_BASE_URL || "http://tank.tail576f3e.ts.net:8888";
   const apiKey = options.apiKey || process.env.UNSLOTH_STUDIO_API_KEY || "sk-unsloth-3806b3388ca2c8f925f8a2a7aeb78445";
-  const model = options.model || process.env.UNSLOTH_SYSTEMONE_MODEL || "laya-english";
-  const timeoutMs = options.timeoutMs ?? 5000;
+  const model = options.model || process.env.UNSLOTH_SYSTEMONE_MODEL || "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF";
+  const timeoutMs = options.timeoutMs ?? 8000;
 
-  const res = await fetch(endpoint, {
+  // Try /v1/systemone first, fall back to /v1/chat/completions
+  const systemOneUrl = options.endpoint || process.env.UNSLOTH_STUDIO_SYSTEMONE_URL || `${baseUrl}/v1/systemone`;
+  try {
+    const res = await fetch(systemOneUrl, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, state, questions }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.ok) return await res.json();
+    if (res.status !== 404) {
+      const errorText = await res.text().catch(() => "");
+      throw new Error(`SystemOne HTTP ${res.status}: ${errorText}`);
+    }
+  } catch (err) {
+    // Fall through to chat completions for 404 or connection errors
+  }
+
+  // Fallback: use /v1/chat/completions with structured prompt
+  const questionKey = Object.keys(questions)[0] || "q";
+  const q = questions[questionKey];
+  const optionLabels = Object.keys(q.criteria || {});
+  const numberedOptions = optionLabels.map((lbl, i) => `${i + 1}. ${lbl}`).join("\n");
+
+  const systemPrompt = `You are a survey respondent. Given the profile below, answer the question by selecting the BEST matching option number. Reply with ONLY the option number (e.g. "3"), nothing else. No explanation.\n\nProfile: ${state}`;
+  const userPrompt = `Question: ${q.instructions || "Select the best option."}\n\nOptions:\n${numberedOptions}\n\nReply with ONLY the number of the best option.`;
+
+  const chatRes = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
-      state,
-      questions,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 20,
+      temperature: 0.3,
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
 
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`Unsloth SystemOne HTTP ${res.status}: ${errorText}`);
+  if (!chatRes.ok) {
+    const errorText = await chatRes.text().catch(() => "");
+    throw new Error(`Chat completions HTTP ${chatRes.status}: ${errorText}`);
   }
 
-  return await res.json();
+  const chatData = await chatRes.json();
+  const rawContent = (chatData.choices?.[0]?.message?.content || chatData.choices?.[0]?.message?.reasoning_content || "").trim();
+  const numMatch = rawContent.match(/\b(\d+)\b/);
+  const chosenIdx = numMatch ? parseInt(numMatch[1], 10) - 1 : -1;
+
+  if (chosenIdx < 0 || chosenIdx >= optionLabels.length) {
+    throw new Error(`Chat response did not map to valid option: "${rawContent}"`);
+  }
+
+  return {
+    model: chatData.model || model,
+    answers: {
+      [questionKey]: {
+        type: "choice",
+        choice: optionLabels[chosenIdx],
+        confidence: 0.80,
+      },
+    },
+  };
 }
 
 /**

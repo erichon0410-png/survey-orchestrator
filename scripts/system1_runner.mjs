@@ -172,7 +172,7 @@ async function runFastPath(send, options = {}) {
   let decision = evaluateControls(harvested, persona);
 
   // If local heuristic cannot handle it and neural Laya is enabled (Tier 2: Unsloth Studio Laya ~100ms)
-  const enableNeuralLaya = options.useNeuralLaya ?? (process.env.SURVEY_NEURAL_LAYA === "1" || process.env.ENABLE_NEURAL_LAYA === "true");
+  const enableNeuralLaya = options.useNeuralLaya ?? (process.env.SURVEY_NEURAL_LAYA !== "0" && process.env.ENABLE_NEURAL_LAYA !== "false");
   if ((!decision || !decision.canHandle) && enableNeuralLaya) {
     const neuralRes = await evaluateControlsNeural(harvested, persona, options);
     if (neuralRes && neuralRes.canHandle) {
