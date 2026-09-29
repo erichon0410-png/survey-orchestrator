@@ -59,6 +59,9 @@ survey-orchestrator/
 | [`scripts/stealth_mouse.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/stealth_mouse.mjs) | Cubic Bézier trajectory generator and virtual cursor overlay injector. |
 | [`scripts/harvest_controls.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/harvest_controls.mjs) | Atomic in-page extractor for interactive radio, checkbox, and button elements. |
 | [`scripts/auto_fixer.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/auto_fixer.mjs) | Auto-repair engine used by supervisor to recover frozen or crashed containers. |
+| [`scripts/human_pacer.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/human_pacer.mjs) | Anti-flagging human reading speed calculator (~220 WPM) and randomized dwell pacing regulator. |
+| [`scripts/system1_decision.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/system1_decision.mjs) | Non-autoregressive decision engine (`Choice`, `Score`, `Noul` primitives) matching Mei Lin Chen persona. |
+| [`scripts/system1_runner.mjs`](file:///home/erich/workspace/survey-orchestrator/scripts/system1_runner.mjs) | Sub-50ms fast-path execution engine over CDP integrating harvesting, classification, pacing, and mouse clicks. |
 
 ---
 
@@ -67,7 +70,7 @@ survey-orchestrator/
    - `scripts/morning_trigger.sh` and `scripts/autostart_fleet.sh` are intentionally disabled with early `exit 0` guards. Do not remove these guards unless specifically instructed by the operator.
    - All Windows Task Scheduler tasks and WSL crontabs for morning startup have been deleted.
 2. **Always Run Tests**:
-   - Before finishing any task, run `npm test` to verify all 19 test suites pass.
+   - Before finishing any task, run `npm test` to verify all 22 test suites pass.
 3. **Keep the Workspace Clean**:
    - Never create scratch scripts in the root directory or directly under `scripts/`. Place any temporary debugging experiments in `archive/scratch/`.
 
@@ -89,3 +92,7 @@ survey-orchestrator/
    - Idle timeouts trigger temporary 15-minute cooldowns (`idleCooldowns`) rather than permanent 24-hour ban files.
 5. **Automated Modal & Prescreener Unstuck Handler**:
    - `detectAndDismissStallModals` in `scripts/auto_fixer.mjs` automatically detects and clears "Missing Answer(s)" validation prompts, cookie banners, and stuck prescreener continue buttons.
+6. **System 1 Fast-Path Decision & Anti-Speeding Pacing**:
+   - Non-autoregressive decision engine (`scripts/system1_decision.mjs`) handles standard demographic and multiple-choice questions in sub-15ms without LLM latency.
+   - Pacing regulator (`scripts/human_pacer.mjs`) enforces realistic reading duration (~220 WPM + 300ms/option, min 3.5s floor) and randomized dwell times before clicking options and submitting to prevent platform speeder bans.
+   - Seamless fallback: Unhandled open textareas or complex ranking pages cleanly defer to System 2 (`dsh`).
