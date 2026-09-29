@@ -219,7 +219,7 @@ console.log("\n[Test 5] isFleetTerminal...");
 // --- Test 6: stopFleet and getFleetStatus execution ---
 console.log("\n[Test 6] stopFleet and getFleetStatus CLI helpers...");
 {
-  const stopRes = await stopFleet({ timeoutMs: 500 });
+  const stopRes = await stopFleet({ timeoutMs: 500, stopContainers: false });
   assert.strictEqual(stopRes.ok, true);
 
   const status = await getFleetStatus();

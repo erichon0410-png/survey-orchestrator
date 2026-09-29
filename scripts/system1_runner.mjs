@@ -26,14 +26,38 @@ try {
 export function selectSurveyTarget(targets, options = {}) {
   if (options.target) return options.target;
   if (!Array.isArray(targets) || targets.length === 0) return null;
-  const pages = targets.filter((t) => t && (t.type === "page" || !t.type) && /^https?:\/\//i.test(t.url));
+  const pages = targets.filter((t) => t && (t.type === "page" || t.type === "iframe" || !t.type) && /^https?:\/\//i.test(t.url));
   if (pages.length === 0) return null;
+
+  if (options.match) {
+    const matched = pages.filter((t) => (t.url || "").toLowerCase().includes(options.match.toLowerCase()));
+    if (matched.length > 0) return matched[matched.length - 1];
+  }
+
   if (pages.length > 1) {
     const surveyPages = pages.filter((t) => {
-      const low = (t.url || "").toLowerCase();
-      return !low.endsWith("/surveys") && !low.endsWith("/dashboard") && (low.includes("prescreener") || low.includes("survey") || low.includes("screener"));
+      try {
+        const u = new URL(t.url);
+        const host = u.hostname.toLowerCase();
+        const path = u.pathname.replace(/\/+$/, "").toLowerCase();
+        if (host.includes("swagbucks.com") && (path === "" || path.startsWith("/surveys") || path.startsWith("/dashboard"))) {
+          return false;
+        }
+        if (host.includes("surveyjunkie.com") && (path === "" || path.startsWith("/surveys") || path.startsWith("/dashboard"))) {
+          return false;
+        }
+        const low = (t.url || "").toLowerCase();
+        if (low.includes("recaptcha") || low.includes("doubleclick") || low.includes("googlesyndication") || low.includes("service-worker")) {
+          return false;
+        }
+        return low.includes("prescreener") || low.includes("survey") || low.includes("screener") || low.includes("decipher") || low.includes("qualtrics") || low.includes("samplicio") || low.includes("cloudfront") || !host.includes("swagbucks.com");
+      } catch {
+        return false;
+      }
     });
     if (surveyPages.length > 0) {
+      const iframeTarget = surveyPages.find((t) => t.type === "iframe");
+      if (iframeTarget) return iframeTarget;
       return surveyPages[surveyPages.length - 1];
     }
   }

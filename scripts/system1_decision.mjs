@@ -447,7 +447,15 @@ export function decideNoul(questionText, options, persona = MEI_LIN_CHEN_PERSONA
     }
   }
 
-  // 8. General binary Yes/No
+  // 8. US residence check
+  if (/\b(live in the united states|reside in the united states|united states resident|live in the us|resident of the us)\b/i.test(qLower)) {
+    const yesOpt = normOpts.find((o) => /^yes$/i.test(o.label));
+    if (yesOpt) {
+      return makeDecision(yesOpt.label, yesOpt.index, 0.99, "Resides in the United States: Yes (Columbus, OH)", "noul");
+    }
+  }
+
+  // 9. General binary Yes/No
   const yesOpt = normOpts.find((o) => /^yes$/i.test(o.label));
   const noOpt = normOpts.find((o) => /^no$/i.test(o.label));
   if (yesOpt && noOpt && normOpts.length <= 3) {

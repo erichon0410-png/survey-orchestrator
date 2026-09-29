@@ -89,13 +89,32 @@ export function getHarvestScript() {
     const checked = !!el.checked;
     const value = el.value || "";
     const disabled = el.disabled || el.getAttribute("aria-disabled") === "true";
+    const clsStr = typeof el.className === "string" ? el.className.trim() : (typeof el.className?.baseVal === "string" ? el.className.baseVal.trim() : "");
+    const isSubmitOrNext = /next|continue|submit|proceed|forward|done/i.test(label) || /next|continue|arrow/i.test(clsStr) || type === "submit";
 
-    if (disabled) continue;
+    if (disabled) {
+      if (isSubmitOrNext) {
+        visibleControls.push({
+          role: "button",
+          label: label || "Continue",
+          tag,
+          type,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          checked,
+          value,
+          disabled: true,
+          selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(Boolean).join(".") : "")),
+          isSubmitOrNext: true,
+        });
+      }
+      continue;
+    }
 
     const x = Math.round(rect.left + rect.width / 2);
     const y = Math.round(rect.top + rect.height / 2);
-
-    const isSubmitOrNext = /next|continue|submit|proceed|forward|done/i.test(label) || type === "submit";
 
     visibleControls.push({
       role,
@@ -169,9 +188,8 @@ export async function harvestControls(send) {
   });
 
   if (res?.exceptionDetails) {
-    throw new Error(
-      `harvestControls evaluation failed: ${res.exceptionDetails.text || JSON.stringify(res.exceptionDetails)}`
-    );
+    const detail = res.exceptionDetails.exception?.description || res.exceptionDetails.text || JSON.stringify(res.exceptionDetails);
+    throw new Error(`harvestControls evaluation failed: ${detail}`);
   }
 
   const raw = res?.result?.value;
