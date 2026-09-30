@@ -50,7 +50,15 @@ export function findDashboardAction(controls = []) {
       const lbl = String(c.label || c.text || "");
       return !/bonus|toggler/i.test(c.className || "") && !/survey bonus/i.test(lbl);
     });
-    const chosen = viableCards[0] || surveyCards[0];
+    const pool = viableCards.length > 0 ? viableCards : surveyCards;
+    pool.sort((a, b) => {
+      const getSb = (c) => {
+        const m = String(c.label || c.text || "").match(/(\d+)\s*(?:sb|pts)/i);
+        return m ? parseInt(m[1], 10) : 0;
+      };
+      return getSb(b) - getSb(a);
+    });
+    const chosen = pool[0];
     return {
       type: "survey_card",
       target: chosen,
@@ -106,15 +114,27 @@ export async function autoLaunchDashboardSurvey(port, options = {}) {
     });
 
     let id = 0;
-    const send = options.send || ((m, p = {}) => new Promise((resolve) => {
+    const send = options.send || ((m, p = {}) => new Promise((resolve, reject) => {
       const cur = ++id;
+      const sendTimeout = setTimeout(() => {
+        if (ws.off) ws.off("message", h);
+        else ws.removeEventListener("message", h);
+        reject(new Error("CDP timeout: " + m));
+      }, 10000);
       const h = (d) => {
-        const raw = typeof d === "string" ? d : d?.data || "{}";
-        const msg = JSON.parse(raw);
-        if (msg.id === cur) {
+        let msg;
+        try {
+          const raw = typeof d === "string" ? d : (d?.data ? String(d.data) : (d?.toString ? d.toString("utf8") : "{}"));
+          msg = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        if (msg && msg.id === cur) {
+          clearTimeout(sendTimeout);
           if (ws.off) ws.off("message", h);
           else ws.removeEventListener("message", h);
-          resolve(msg.result);
+          if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+          else resolve(msg.result ?? {});
         }
       };
       if (ws.on) ws.on("message", h);

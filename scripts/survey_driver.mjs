@@ -1372,8 +1372,11 @@ async function main() {
                 event: "progress",
                 note: `driver: dashboard auto-launched survey (${launchRes.targetLabel})`,
               });
-              await new Promise((r) => setTimeout(r, 2500));
-              isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+              for (let w = 0; w < 4; w++) {
+                await new Promise((r) => setTimeout(r, 1200));
+                isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+                if (isSurveyActive) break;
+              }
             }
           } catch {}
         }
@@ -1415,6 +1418,7 @@ async function main() {
               finishClean(EXIT_OK);
               return;
             }
+            continue;
           }
         }
       } catch (err) {

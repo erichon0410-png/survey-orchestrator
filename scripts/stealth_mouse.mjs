@@ -379,6 +379,38 @@ export async function stealthClick(send, target, options = {}) {
     clickCount: options.clickCount || 1,
   });
 
+  // 5.5 In-DOM event dispatch guarantee (ensures Docker/headless Chrome toggles inputs)
+  try {
+    const sel = typeof target === "string" ? target : target?.selector;
+    await send("Runtime.evaluate", {
+      expression: `(() => {
+        let el = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
+        if (!el && ${destPt.x} > 0 && ${destPt.y} > 0) {
+          el = document.elementFromPoint(${destPt.x}, ${destPt.y});
+        }
+        if (el) {
+          if (el.disabled) {
+            el.disabled = false;
+            el.removeAttribute('disabled');
+          }
+          const k = Object.keys(el).find(x => x.startsWith('__reactProps') || x.startsWith('__reactEventHandlers'));
+          if (k && el[k] && typeof el[k].onClick === 'function') {
+            try { el[k].onClick({ target: el, currentTarget: el, persist: () => {}, preventDefault: () => {}, stopPropagation: () => {} }); } catch {}
+          }
+          if (typeof el.click === 'function') {
+            el.click();
+          }
+          if (el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) {
+            el.checked = true;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+      })()`,
+      returnByValue: false,
+    });
+  } catch {}
+
   // 6. Post-click settle (25-40ms)
   const settleMs = options.settleMs ?? (25 + Math.floor(Math.random() * 15));
   if (settleMs > 0) {

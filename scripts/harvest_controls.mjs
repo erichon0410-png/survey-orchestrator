@@ -90,7 +90,13 @@ export function getHarvestScript() {
     const disabled = el.disabled || el.getAttribute("aria-disabled") === "true";
     const clsStr = typeof el.className === "string" ? el.className.trim() : (typeof el.className?.baseVal === "string" ? el.className.baseVal.trim() : "");
     const isBack = /back|prev(ious)?/i.test(label) || /back|prev/i.test(clsStr) || label === "<";
-    const isSubmitOrNext = !isBack && (/next|continue|submit|proceed|forward|done/i.test(label) || /next|continue|arrow/i.test(clsStr) || type === "submit");
+    const isSubmitOrNext = !isBack && (
+      /next|continue|submit|proceed|forward|done|finish/i.test(label) ||
+      /^[➔→>»▶\s]+$/.test(label) ||
+      /next|continue|arrow|submit|forward/i.test(clsStr) ||
+      /next|continue|submit|forward/i.test(el.id || "") ||
+      type === "submit"
+    );
 
     if (disabled) {
       if (isSubmitOrNext) {
@@ -245,6 +251,58 @@ export function getHarvestScript() {
         isSubmitOrNext: false,
       }],
     });
+  }
+
+  // Include visible select dropdowns (e.g. Age, State, Gender, Education)
+  const allSelects = Array.from(document.querySelectorAll("select")).filter(sel => {
+    const s = window.getComputedStyle(sel);
+    if (s.display === "none" || s.visibility === "hidden" || sel.disabled) return false;
+    return true;
+  });
+
+  for (const sel of allSelects) {
+    const container = sel.closest("fieldset, .sg-question, .QuestionOuter, [class*='question-container'], [class*='question-wrapper']") || sel.closest("form > div");
+    const isVis = container ? (window.getComputedStyle(container).display !== "none" && window.getComputedStyle(container).visibility !== "hidden" && container.getBoundingClientRect().height > 10) : true;
+    if (!isVis) continue;
+    const titleEl = container ? container.querySelector("legend, .sg-question-title, [class*='question-title'], h1, h2, h3, h4, label") : null;
+    let title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : (sel.getAttribute("aria-label") || "")).replace(/This question is required\.?/gi, "").trim().replace(/\s+/g, " ");
+    let rect = sel.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      const parent = sel.parentElement;
+      if (parent) rect = parent.getBoundingClientRect();
+    }
+    const selCss = sel.id ? "#" + CSS.escape(sel.id) : (sel.name ? "select[name='" + CSS.escape(sel.name) + "']" : "select");
+    const optList = Array.from(sel.options).filter(o => o.value !== "" && o.value !== "-1" && !o.disabled).map(o => ({
+      role: "option",
+      type: "option",
+      tag: "option",
+      value: o.value,
+      label: (o.text || o.innerText || o.value).trim(),
+      selected: o.selected,
+      selector: selCss,
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+      isCenter: true,
+      isSubmitOrNext: false,
+    }));
+
+    if (optList.length > 0) {
+      questionGroups.push({
+        name: sel.name || sel.id || "select_dropdown",
+        title: title || extractQuestion(),
+        isVisible: true,
+        hasChecked: !!sel.value && sel.value !== "" && sel.value !== "-1",
+        type: "select",
+        selector: selCss,
+        options: optList,
+      });
+
+      for (const opt of optList) {
+        visibleControls.push(opt);
+      }
+    }
   }
 
   const consentCheckboxes = [];

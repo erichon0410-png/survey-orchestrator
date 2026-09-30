@@ -236,6 +236,20 @@ async function runFastPath(send, options = {}) {
             })()`,
             returnByValue: true,
           });
+        } else if (groupDecision.targetControl?.role === "option" || groupDecision.targetControl?.tag === "option") {
+          const optVal = groupDecision.targetControl.value;
+          const selCss = groupDecision.targetControl.selector || grp.selector;
+          await send("Runtime.evaluate", {
+            expression: `(() => {
+              const sel = document.querySelector(${JSON.stringify(selCss)});
+              if (!sel) return false;
+              sel.value = ${JSON.stringify(optVal)};
+              sel.dispatchEvent(new Event("input", { bubbles: true }));
+              sel.dispatchEvent(new Event("change", { bubbles: true }));
+              return true;
+            })()`,
+            returnByValue: true,
+          });
         } else {
           await stealthClick(send, groupDecision.targetControl, { ...options, isIframe: options.isIframe });
         }
@@ -376,6 +390,21 @@ async function runFastPath(send, options = {}) {
         inp.dispatchEvent(new Event("input", { bubbles: true }));
         inp.dispatchEvent(new Event("change", { bubbles: true }));
         inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        return true;
+      })()`,
+      returnByValue: true,
+    });
+  } else if (targetControl.role === "option" || targetControl.tag === "option") {
+    const optVal = targetControl.value;
+    const selCss = targetControl.selector;
+    console.log(`[fastpath] Selecting dropdown option: "${targetControl.label}" (value=${optVal}) on ${selCss}`);
+    await send("Runtime.evaluate", {
+      expression: `(() => {
+        const sel = document.querySelector(${JSON.stringify(selCss)});
+        if (!sel) return false;
+        sel.value = ${JSON.stringify(optVal)};
+        sel.dispatchEvent(new Event("input", { bubbles: true }));
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
         return true;
       })()`,
       returnByValue: true,

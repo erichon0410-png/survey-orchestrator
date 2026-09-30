@@ -24,11 +24,11 @@ console.log("[test] 1. calculateJitter respects isCenter flag");
 console.log("[test] 2. stealthClick auto-scrolls harvested control below the fold and clicks fresh coordinates");
 {
   const mouseEvents = [];
-  let evaluatedScript = null;
+  let evaluatedScripts = [];
 
   const mockSend = async (method, params) => {
     if (method === "Runtime.evaluate") {
-      evaluatedScript = params.expression;
+      evaluatedScripts.push(params.expression);
       // Simulate element scrolled from y=1249 to viewport center y=350
       return {
         result: {
@@ -69,8 +69,8 @@ console.log("[test] 2. stealthClick auto-scrolls harvested control below the fol
   });
 
   assert.equal(res.ok, true);
-  assert.ok(evaluatedScript.includes("scrollIntoView"), "must evaluate script with scrollIntoView");
-  assert.ok(evaluatedScript.includes("#question-121969-option-none-of-the-above"), "must query selector");
+  assert.ok(evaluatedScripts.some(s => s.includes("scrollIntoView")), "must evaluate script with scrollIntoView");
+  assert.ok(evaluatedScripts.some(s => s.includes("#question-121969-option-none-of-the-above")), "must query selector");
 
   // Coordinates should be centered around (100 + 400/2 = 300, 350 + 60/2 = 380), NOT off-screen y=1249!
   assert.ok(res.x >= 220 && res.x <= 380, `res.x ${res.x} not within scrolled element bounds`);
