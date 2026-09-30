@@ -49,6 +49,7 @@ import { fileURLToPath } from "node:url";
 import { createEventPublisher } from "./observability_hub.mjs";
 import { normalizeCodexLine } from "./fleet_events.mjs";
 import { tryExecuteFastPath } from "./system1_runner.mjs";
+import { autoLaunchDashboardSurvey } from "./dashboard_launcher.mjs";
 import { selectSurveyTarget } from "./system1_runner.mjs";
 
 export const ENABLE_FASTPATH = process.env.SURVEY_FASTPATH !== "0";
@@ -1361,7 +1362,21 @@ async function main() {
     // evaluate and execute non-autoregressive responses to avoid heavy LLM turn overhead.
     if (ENABLE_FASTPATH) {
       try {
-        const isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+        let isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+        if (!isSurveyActive) {
+          try {
+            const launchRes = await autoLaunchDashboardSurvey(PORT);
+            if (launchRes && launchRes.launched) {
+              log("info", `dashboard auto-launched survey via ${launchRes.action} ("${launchRes.targetLabel}")`);
+              appendStatus({
+                event: "progress",
+                note: `driver: dashboard auto-launched survey (${launchRes.targetLabel})`,
+              });
+              await new Promise((r) => setTimeout(r, 2500));
+              isSurveyActive = await isTargetPageActiveQuestionnaire(PORT);
+            }
+          } catch {}
+        }
         if (isSurveyActive) {
           log("info", `active questionnaire detected on port ${PORT}; attempting system 1 fast-path`);
           let fastHandledCount = 0;

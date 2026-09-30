@@ -207,6 +207,18 @@ export function getStallModalScript() {
       }
     }
 
+    // 4. Dashboard Survey Launch Modals
+    const dashboardStartBtn = Array.from(document.querySelectorAll("button, a")).find(b => {
+      if (!isVisible(b)) return false;
+      const text = getText(b);
+      return /^(start survey|take survey|try this survey|take this survey)$/i.test(text) ||
+             /start-survey-cta/i.test(b.className || "");
+    });
+    if (dashboardStartBtn) {
+      dashboardStartBtn.click();
+      return { detected: true, type: "dashboard_survey_modal", actionTaken: "clicked_start_survey" };
+    }
+
     return { detected: false };
   })()`;
 }
