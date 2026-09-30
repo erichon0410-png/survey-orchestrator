@@ -629,11 +629,18 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
   }
 
   // Filter for actionable option controls (radios, checkboxes, select options)
-  const actionable = controls.filter(
+  let actionable = controls.filter(
     (c) =>
       !c.isSubmitOrNext &&
       (c.role === "radio" || c.type === "radio" || c.role === "checkbox" || c.type === "checkbox" || c.role === "option")
   );
+
+  if (actionable.length === 0) {
+    const buttonOptions = controls.filter((c) => !c.isSubmitOrNext && (c.role === "button" || c.tag === "button"));
+    if (buttonOptions.length > 1) {
+      actionable = buttonOptions;
+    }
+  }
 
   if (actionable.length === 0) {
     const textControl = controls.find((c) => (c.role === "textbox" || c.tag === "input") && !c.isSubmitOrNext);
@@ -844,11 +851,18 @@ export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_P
   if (!controls || controls.length === 0) return { canHandle: false };
 
   // Filter for actionable option controls
-  const actionable = controls.filter(
+  let actionable = controls.filter(
     (c) =>
       !c.isSubmitOrNext &&
       (c.role === "radio" || c.type === "radio" || c.role === "option" || c.role === "checkbox" || c.type === "checkbox")
   );
+
+  if (actionable.length === 0) {
+    const buttonOptions = controls.filter((c) => !c.isSubmitOrNext && (c.role === "button" || c.tag === "button"));
+    if (buttonOptions.length > 1) {
+      actionable = buttonOptions;
+    }
+  }
 
   if (actionable.length === 0) return { canHandle: false };
 

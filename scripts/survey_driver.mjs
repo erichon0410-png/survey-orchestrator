@@ -1448,10 +1448,6 @@ async function main() {
       argsArr = [
         "--profile", "headless",
         "--patch", patchPath,
-        "--preset", PRESET,
-        "--provider", PROVIDER,
-        "--model", MODEL,
-        ...(EFFORT ? ["--reasoning-effort", EFFORT] : []),
         currentPrompt
       ];
     } else {
