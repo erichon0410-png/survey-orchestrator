@@ -84,6 +84,8 @@ export function findDashboardAction(controls = []) {
   return null;
 }
 
+import { withCDPSession } from "./system1_runner.mjs";
+
 export async function autoLaunchDashboardSurvey(port, options = {}) {
   const host = options.host || "127.0.0.1";
   try {
@@ -93,96 +95,46 @@ export async function autoLaunchDashboardSurvey(port, options = {}) {
     const dashboardTarget = targets.find((t) => t && (t.type === "page" || !t.type) && isDashboardPage(t));
     if (!dashboardTarget) return { launched: false, reason: "not_on_dashboard" };
 
-    const wsUrl = dashboardTarget.webSocketDebuggerUrl.replace(/ws:\/\/[^/]+/, `ws://${host}:${port}/cdp`);
-    let WebSocketClass = options.WebSocket;
-    if (!WebSocketClass) {
-      try {
-        WebSocketClass = (await import("ws")).default;
-      } catch {
-        WebSocketClass = globalThis.WebSocket;
-      }
-    }
+    return await withCDPSession(port, { target: dashboardTarget, host }, async (send) => {
+      const evalRes = await send("Runtime.evaluate", {
+        expression: `(() => {
+          function isVis(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }
+          return Array.from(document.querySelectorAll("button, a, div[role=button], div[class*='card']")).filter(isVis).map(el => {
+            const r = el.getBoundingClientRect();
+            return {
+              role: el.getAttribute("role") || el.tagName.toLowerCase(),
+              label: (el.innerText || el.textContent || "").trim().substring(0, 100),
+              className: typeof el.className === "string" ? el.className : "",
+              x: Math.round(r.left + r.width / 2),
+              y: Math.round(r.top + r.height / 2),
+              w: Math.round(r.width),
+              h: Math.round(r.height),
+              id: el.id
+            };
+          });
+        })()`,
+        returnByValue: true,
+      });
 
-    const ws = new WebSocketClass(wsUrl);
-    await new Promise((resolve, reject) => {
-      if (ws.once) {
-        ws.once("open", resolve);
-        ws.once("error", reject);
-      } else {
-        ws.addEventListener("open", resolve, { once: true });
-        ws.addEventListener("error", reject, { once: true });
+      const controls = evalRes?.result?.value || [];
+      const action = findDashboardAction(controls);
+      if (!action) {
+        return { launched: false, reason: "no_dashboard_action_found" };
       }
-    });
 
-    let id = 0;
-    const send = options.send || ((m, p = {}) => new Promise((resolve, reject) => {
-      const cur = ++id;
-      const sendTimeout = setTimeout(() => {
-        if (ws.off) ws.off("message", h);
-        else ws.removeEventListener("message", h);
-        reject(new Error("CDP timeout: " + m));
-      }, 10000);
-      const h = (d) => {
-        let msg;
-        try {
-          const raw = typeof d === "string" ? d : (d?.data ? String(d.data) : (d?.toString ? d.toString("utf8") : "{}"));
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        if (msg && msg.id === cur) {
-          clearTimeout(sendTimeout);
-          if (ws.off) ws.off("message", h);
-          else ws.removeEventListener("message", h);
-          if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-          else resolve(msg.result ?? {});
-        }
+      const clickFn = options.stealthClick || stealthClick;
+      await clickFn(send, action.target, { isIframe: false });
+
+      return {
+        launched: true,
+        action: action.type,
+        targetLabel: action.label,
       };
-      if (ws.on) ws.on("message", h);
-      else ws.addEventListener("message", h);
-      ws.send(JSON.stringify({ id: cur, method: m, params: p }));
-    }));
-
-    const evalRes = await send("Runtime.evaluate", {
-      expression: `(() => {
-        function isVis(el) {
-          if (!el) return false;
-          const r = el.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        }
-        return Array.from(document.querySelectorAll("button, a, div[role=button], div[class*='card']")).filter(isVis).map(el => {
-          const r = el.getBoundingClientRect();
-          return {
-            role: el.getAttribute("role") || el.tagName.toLowerCase(),
-            label: (el.innerText || el.textContent || "").trim().substring(0, 100),
-            className: typeof el.className === "string" ? el.className : "",
-            x: Math.round(r.left + r.width / 2),
-            y: Math.round(r.top + r.height / 2),
-            w: Math.round(r.width),
-            h: Math.round(r.height),
-            id: el.id
-          };
-        });
-      })()`,
-      returnByValue: true,
     });
-
-    const controls = evalRes?.result?.value || [];
-    const action = findDashboardAction(controls);
-    if (!action) {
-      ws.close();
-      return { launched: false, reason: "no_dashboard_action_found" };
-    }
-
-    const clickFn = options.stealthClick || stealthClick;
-    await clickFn(send, action.target, { isIframe: false });
-    ws.close();
-
-    return {
-      launched: true,
-      action: action.type,
-      targetLabel: action.label,
-    };
   } catch (err) {
     return { launched: false, reason: err.message || String(err) };
   }
