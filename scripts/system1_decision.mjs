@@ -174,15 +174,28 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
 
   // 1. GENDER
   const isGenderQ = /\b(gender|sex\b|identify\s*as)\b/i.test(qLower);
-  const hasMaleOpt = normOpts.some((o) => /^(male|man)$/i.test(o.label));
-  const hasFemaleOpt = normOpts.some((o) => /^(female|woman)$/i.test(o.label));
+  const hasMaleOpt = normOpts.some((o) => /\b(male|man|boy)\b/i.test(o.label));
+  const hasFemaleOpt = normOpts.some((o) => /\b(female|woman|girl)\b/i.test(o.label));
 
   if (isGenderQ || (hasMaleOpt && hasFemaleOpt)) {
+    const isMember2 = /\b(member\s*2|spouse|husband|partner)\b/i.test(qLower);
+    const isMember3 = /\b(member\s*3|child|son)\b/i.test(qLower);
+    const isMaleTarget = isMember2 || isMember3;
+
+    if (isMaleTarget) {
+      const maleFound = normOpts.find((o) => /\b(man\/boy|man|boy|male)\b/i.test(o.label) && !/\b(woman|girl|female)\b/i.test(o.label)) ||
+                        normOpts.find((o) => /man\/boy/i.test(o.label));
+      if (maleFound) {
+        return makeDecision(maleFound.label, maleFound.index, 0.98, `Matched male family member: ${maleFound.label}`, "choice");
+      }
+    }
+
     const targetGender = persona.gender || "Female";
     const found = normOpts.find((o) =>
       new RegExp(`^${targetGender}$`, "i").test(o.label) ||
       /\bfemale\b/i.test(o.label) ||
-      /^woman$/i.test(o.label)
+      /^woman$/i.test(o.label) ||
+      /woman\/girl/i.test(o.label)
     );
     if (found) {
       return makeDecision(found.label, found.index, 0.98, `Matched gender: ${found.label}`, "choice");
@@ -237,6 +250,43 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
     if (rangeOpt) {
       return makeDecision(rangeOpt.label, rangeOpt.index, 0.94, `Matched age range: ${rangeOpt.label}`, "choice");
     }
+  }
+
+  // 2.2 BIRTH MONTH
+  const isMonthQ = /\b(month.*born|birth\s*month|which\s*month)\b/i.test(qLower) || normOpts.some((o) => /^january|february|march|april$/i.test(o.label));
+  if (isMonthQ) {
+    const targetMonthName = persona.date_of_birth?.month_name || "April";
+    const targetMonthNum = persona.date_of_birth?.month || 4;
+    const monthFound = normOpts.find((o) =>
+      new RegExp(`^${targetMonthName}$`, "i").test(o.label) ||
+      new RegExp(`^0?${targetMonthNum}$`).test(o.label) ||
+      new RegExp(`^0?${targetMonthNum}\\s*-\\s*${targetMonthName}`, "i").test(o.label)
+    );
+    if (monthFound) {
+      return makeDecision(monthFound.label, monthFound.index, 0.99, `Matched birth month: ${monthFound.label}`, "choice");
+    }
+  }
+
+  // 2.3 BIRTH DAY
+  const isDayQ = /\b(day.*born|birth\s*day|day\s*of\s*(?:the\s*)?month)\b/i.test(qLower);
+  if (isDayQ) {
+    const targetDay = persona.date_of_birth?.day || 10;
+    const dayFound = normOpts.find((o) => new RegExp(`^0?${targetDay}$`).test(o.label));
+    if (dayFound) {
+      return makeDecision(dayFound.label, dayFound.index, 0.99, `Matched birth day: ${dayFound.label}`, "choice");
+    }
+  }
+
+  // 2.5 COUNTRY / NATION
+  const isCountryQ = /\b(country|nation|where do you live|residence country)\b/i.test(qLower);
+  const targetCountry = persona.location?.country || "United States";
+  const countryFound = normOpts.find((o) =>
+    new RegExp(`^${targetCountry}$`, "i").test(o.label) ||
+    new RegExp(`\\b${targetCountry}\\b`, "i").test(o.label) ||
+    /^usa?$|^u\.s\.a?\.?$/i.test(o.label)
+  );
+  if ((isCountryQ || countryFound) && countryFound && (isCountryQ || normOpts.some((o) => /canada|united kingdom|mexico/i.test(o.label)))) {
+    return makeDecision(countryFound.label, countryFound.index, 0.99, `Matched country: ${countryFound.label}`, "choice");
   }
 
   // 3. STATE / CITY / ZIP
@@ -313,13 +363,22 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
     }
   }
 
+  // 5.5 STUDENT STATUS
+  const isStudentQ = /\b(currently a student|enrolled in school|attending school|student status)\b/i.test(qLower);
+  if (isStudentQ) {
+    const noStudent = normOpts.find((o) => /^no$|^not a student$|not currently enrolled/i.test(o.label));
+    if (noStudent) {
+      return makeDecision(noStudent.label, noStudent.index, 0.96, `Matched non-student: ${noStudent.label}`, "choice");
+    }
+  }
+
   // 6. EMPLOYMENT
   const isEmpQ = /\b(employment|work status|currently employed|occupational|work situation)\b/i.test(qLower);
   const hasEmpOpts = normOpts.some((o) => /full-time|part-time|unemployed|retired/i.test(o.label));
 
   if (isEmpQ || hasEmpOpts) {
     const fullTime = normOpts.find((o) =>
-      /employed\s*full-time|full-time\s*employee|^full-time$|working\s*full-time|35\+\s*hours/i.test(o.label)
+      /employed\s*full-time|full-time\s*employee|^full-time$|working\s*full-time|35\+\s*hours|working\s*for\s*pay|^employed$/i.test(o.label)
     );
     if (fullTime) {
       return makeDecision(fullTime.label, fullTime.index, 0.96, `Matched employment: ${fullTime.label}`, "choice");
@@ -389,6 +448,186 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
       if (repOpt) {
         return makeDecision(repOpt.label, repOpt.index, 0.95, `Matched Republican candidate/party: ${repOpt.label}`, "choice");
       }
+    }
+  }
+
+  // 10. MEDIA & TV SHOWS
+  const isMediaQ = /\b(watched|shows?|series|episodes?|television|tv\s*shows?|broadcast)\b/i.test(qLower);
+  if (isMediaQ) {
+    const mainstreamShows = [
+      /\bncis\b(?!\s*ny)/i,
+      /\bfbi\b(?!\s*cia)/i,
+      /\btracker\b/i,
+      /\belsbeth\b/i,
+      /\bfire\s*country\b/i,
+      /\bgeorgie\s*(&|and)\s*mandy\b/i,
+      /\bfriends\b/i,
+      /\bthe\s*office\b/i,
+      /\blaw\s*(&|and)\s*order\b/i,
+      /\bgrey'?s\s*anatomy\b/i,
+      /\byellowstone\b/i,
+    ];
+    for (const pat of mainstreamShows) {
+      const match = normOpts.find((o) => pat.test(o.label) && !/none of the above|not applicable/i.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched mainstream TV show: ${match.label}`, "choice");
+      }
+    }
+    const viable = normOpts.find((o) => !/none of the above|^none$|not applicable|don'?t know|haven'?t watched|other/i.test(o.label));
+    if (viable) {
+      return makeDecision(viable.label, viable.index, 0.90, `Selected active media option: ${viable.label}`, "choice");
+    }
+  }
+
+  // 11. STREAMING SERVICES & SUBSCRIPTIONS
+  const isStreamingQ = /\b(streaming|subscription|video\s*on\s*demand|watch\s*movies|music\s*service)\b/i.test(qLower);
+  if (isStreamingQ) {
+    const popularStreaming = [
+      /\bnetflix\b/i,
+      /\bprime\s*video|amazon\s*prime\b/i,
+      /\bhulu\b/i,
+      /\bdisney\+?|disney\s*plus\b/i,
+      /\byoutube\s*(?:premium|tv)\b/i,
+      /\bmax\b|\bhbo\b/i,
+      /\bspotify\b/i,
+      /\bapple\s*(?:tv|music)\b/i,
+    ];
+    for (const pat of popularStreaming) {
+      const match = normOpts.find((o) => pat.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched streaming service: ${match.label}`, "choice");
+      }
+    }
+    const viable = normOpts.find((o) => !/none of the above|^none$|not applicable|don'?t use|other/i.test(o.label));
+    if (viable) {
+      return makeDecision(viable.label, viable.index, 0.90, `Selected active streaming service: ${viable.label}`, "choice");
+    }
+  }
+
+  // 12. CONSUMER DEVICES & TECHNOLOGY
+  const isDeviceQ = /\b(devices?|smartphone|tablet|laptop|computer|electronics?|smart\s*tv)\b/i.test(qLower);
+  if (isDeviceQ) {
+    const popularDevices = [
+      /\bsmartphone|iphone|android\b/i,
+      /\blaptop|notebook\b/i,
+      /\bsmart\s*tv\b/i,
+      /\btablet|ipad\b/i,
+      /\bdesktop|personal\s*computer\b/i,
+    ];
+    for (const pat of popularDevices) {
+      const match = normOpts.find((o) => pat.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched consumer device: ${match.label}`, "choice");
+      }
+    }
+    const viable = normOpts.find((o) => !/none of the above|^none$|not applicable|other/i.test(o.label));
+    if (viable) {
+      return makeDecision(viable.label, viable.index, 0.90, `Selected owned device: ${viable.label}`, "choice");
+    }
+  }
+
+  // 13. RETAIL & GROCERY STORES
+  const isRetailQ = /\b(stores?|retail|supermarket|grocer\w*|where\s*do\s*you\s*(?:shop|buy))\b/i.test(qLower);
+  if (isRetailQ) {
+    const popularStores = [
+      /\btarget\b/i,
+      /\bamazon\b/i,
+      /\bkroger\b/i,
+      /\bwalmart\b/i,
+      /\bcostco\b/i,
+      /\bwhole\s*foods\b/i,
+    ];
+    for (const pat of popularStores) {
+      const match = normOpts.find((o) => pat.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched retail/grocery: ${match.label}`, "choice");
+      }
+    }
+    const viable = normOpts.find((o) => !/none of the above|^none$|not applicable|other/i.test(o.label));
+    if (viable) {
+      return makeDecision(viable.label, viable.index, 0.90, `Selected active retailer: ${viable.label}`, "choice");
+    }
+  }
+
+  // 14. MOBILE WIRELESS CARRIER
+  const isCarrierQ = /\b(wireless|carrier|cellular|mobile\s*provider|cell\s*phone\s*service)\b/i.test(qLower);
+  if (isCarrierQ) {
+    const popularCarriers = [
+      /\bverizon\b/i,
+      /\bat&t\b/i,
+      /\bt-mobile\b/i,
+    ];
+    for (const pat of popularCarriers) {
+      const match = normOpts.find((o) => pat.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched wireless carrier: ${match.label}`, "choice");
+      }
+    }
+  }
+
+  // 15. INDUSTRY / CONFLICT-OF-INTEREST EXCLUSION
+  const isIndustryConflictQ = /\b(work for any of the following|industry|industries|types? of companies|field of work)\b/i.test(qLower);
+  if (isIndustryConflictQ) {
+    const hasConflictFields = normOpts.some((o) =>
+      /\b(marketing|market research|advertising|public relations|journalism|broadcasting)\b/i.test(o.label)
+    );
+    if (hasConflictFields) {
+      const noneOpt = normOpts.find((o) => /\bnone of the above\b|^none$/i.test(o.label));
+      if (noneOpt) {
+        return makeDecision(noneOpt.label, noneOpt.index, 0.98, "Avoided industry conflict trap: None of the above", "choice");
+      }
+    }
+
+    const personaIndustry = [
+      /\b(healthcare|health care|hospital|medical)\b/i,
+      /\b(pharmaceutical|biotech|clinical research|life sciences)\b/i,
+      /\b(information technology|software|technology|science|research)\b/i,
+    ];
+    for (const pat of personaIndustry) {
+      const match = normOpts.find((o) => pat.test(o.label));
+      if (match) {
+        return makeDecision(match.label, match.index, 0.95, `Matched persona industry: ${match.label}`, "choice");
+      }
+    }
+  }
+
+  // 16. VACATION & TRAVEL
+  const isVacationQ = /\b(vacation|leisure trip|travel|flights?|hotel|holiday)\b/i.test(qLower);
+  if (isVacationQ) {
+    const isSpendQ = /\b(spend|spent|cost|budget|expenses?|dollar|amount|how much.*vacation)\b/i.test(qLower);
+    if (isSpendQ) {
+      const spendMatch = normOpts.find((o) => /\b(3,?000|4,?000|5,?000|7,?500)\b/i.test(o.label));
+      if (spendMatch) {
+        return makeDecision(spendMatch.label, spendMatch.index, 0.95, `Matched vacation spend: ${spendMatch.label}`, "choice");
+      }
+    }
+    const freqMatch = normOpts.find((o) => /\b(2\s*(?:to|-)\s*3|2|3|1\s*(?:to|-)\s*2|several|frequently|once or twice)\b/i.test(o.label));
+    if (freqMatch) {
+      return makeDecision(freqMatch.label, freqMatch.index, 0.92, `Selected vacation frequency: ${freqMatch.label}`, "choice");
+    }
+    const yesMatch = normOpts.find((o) => /^yes\b|planning/i.test(o.label));
+    if (yesMatch) {
+      return makeDecision(yesMatch.label, yesMatch.index, 0.95, `Planning vacation: ${yesMatch.label}`, "choice");
+    }
+  }
+  // 17. HOUSEHOLD SIZE & CHILDREN
+  const isHhSizeQ = /\b(how many people.*household|household.*(?:size|how many|number)|people live in your household|total.*household)\b/i.test(qLower);
+  if (isHhSizeQ) {
+    const exact = normOpts.find((o) => /^0?3$|^3\s*(people|persons?)?$/i.test(o.label) || /\bthree\b/i.test(o.label));
+    if (exact) {
+      return makeDecision(exact.label, exact.index, 0.98, `Matched household size: ${exact.label}`, "choice");
+    }
+    const rangeOpt = normOpts.find((o) => /\b(3\s*[-–—]\s*[45]|3\s*or\s*more)\b/i.test(o.label));
+    if (rangeOpt) {
+      return makeDecision(rangeOpt.label, rangeOpt.index, 0.94, `Matched household size range: ${rangeOpt.label}`, "choice");
+    }
+  }
+
+  const isChildrenCountQ = /\b(how many children|children.*(?:in|under)|number of children)\b/i.test(qLower);
+  if (isChildrenCountQ) {
+    const exact = normOpts.find((o) => /^0?1$|^1\s*(child|children)?$/i.test(o.label) || /\bone\b/i.test(o.label));
+    if (exact) {
+      return makeDecision(exact.label, exact.index, 0.98, `Matched children count: ${exact.label}`, "choice");
     }
   }
 
@@ -510,7 +749,7 @@ export function decideScore(questionText, options, persona = MEI_LIN_CHEN_PERSON
   // Detect numeric Likert scales (e.g. 1..5, 1..7)
   const isAllNumeric = normOpts.every((o) => /^\d{1,2}$/.test(o.label));
   const hasLikertTerms = normOpts.some((o) =>
-    /agree|disagree|satisfied|dissatisfied|likely|unlikely|poor|excellent/i.test(o.label)
+    /agree|disagree|satisfied|dissatisfied|likely|unlikely|poor|excellent|always|often|sometimes|rarely|never|frequently|familiar|know a (lot|little)|never heard/i.test(o.label)
   );
 
   if (!isAllNumeric && !hasLikertTerms) return null;
@@ -573,9 +812,9 @@ export function decideScore(questionText, options, persona = MEI_LIN_CHEN_PERSON
       return makeDecision(agree.label, agree.index, 0.92, reason, "score");
     }
   } else {
-    // Favorable sentiment: Satisfied, Agree, Likely
+    // Favorable sentiment: Satisfied, Agree, Likely, Often, Sometimes, Know a little/lot
     const satisfied = normOpts.find((o) =>
-      /^4\s*-\s*satisfied|^satisfied$|somewhat\s*satisfied|^agree$|somewhat\s*agree|^likely$/i.test(o.label)
+      /^4\s*-\s*satisfied|^satisfied$|somewhat\s*satisfied|^agree$|somewhat\s*agree|^likely$|\boften\b|\bsometimes\b|know a (little|lot)|somewhat familiar/i.test(o.label)
     );
     if (satisfied) {
       return makeDecision(satisfied.label, satisfied.index, 0.92, reason, "score");
@@ -623,6 +862,129 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
 
   if (!Array.isArray(controls) || controls.length === 0) {
     return { canHandle: false };
+  }
+
+  // If question is generic error banner (e.g. "Please correct the errors below"), check controls for true question
+  if (!questionText || /please correct the errors|error occurred/i.test(questionText)) {
+    const qInControl = controls.find((c) => /\?$/.test(c.label || "") || /\bwhat is\b/i.test(c.label || ""));
+    if (qInControl) {
+      questionText = qInControl.label;
+    }
+  }
+
+  function solveArithmetic(text) {
+    if (!text) return null;
+    const m = text.match(/\b(?:what is|calculate|solve|how much is)\s*(\d+)\s*([\+\-\*]|plus|minus|times)\s*(\d+)/i);
+    if (!m) return null;
+    const n1 = parseInt(m[1], 10);
+    const op = m[2].toLowerCase();
+    const n2 = parseInt(m[3], 10);
+    let ans;
+    if (op === "+" || op === "plus") ans = n1 + n2;
+    else if (op === "-" || op === "minus") ans = n1 - n2;
+    else if (op === "*" || op === "times") ans = n1 * n2;
+    else return null;
+    return String(ans);
+  }
+
+  function solveRhyme(text, options) {
+    if (!text) return null;
+    const m = text.match(/\brhymes?\s+with\s*["'“]?([a-zA-Z]+)["'”]?/i);
+    if (!m) return null;
+    const targetWord = m[1].toLowerCase();
+
+    const RHYME_MAP = {
+      cry: new Set(["buy", "shy", "sky", "try", "fly", "why", "lie", "die", "my", "pie", "tie", "high", "sigh", "guy", "bye", "eye", "dry", "spy", "sly", "fry", "ply", "pry"]),
+      cat: new Set(["bat", "hat", "mat", "rat", "fat", "sat", "pat", "chat", "flat"]),
+      bake: new Set(["make", "fake", "lake", "take", "wake", "shake", "cake", "rake", "brake", "stake", "snake"]),
+      cake: new Set(["make", "fake", "lake", "take", "wake", "shake", "bake", "rake", "brake", "stake", "snake"]),
+      blue: new Set(["clue", "shoe", "true", "flew", "grew", "knew", "too", "two", "do", "zoo", "due", "glue", "chew", "through"]),
+      day: new Set(["say", "may", "pay", "play", "stay", "way", "bay", "clay", "gray", "ray", "hay", "lay", "pray"]),
+      tree: new Set(["bee", "see", "free", "three", "flee", "knee", "tea", "sea", "key", "fee", "plee"]),
+      light: new Set(["bright", "night", "sight", "fight", "flight", "right", "tight", "white", "bite", "kite", "mite", "quite"]),
+      bear: new Set(["care", "dare", "fair", "hair", "share", "stare", "pear", "wear", "tear", "chair", "rare", "there", "where"]),
+      ring: new Set(["sing", "wing", "king", "thing", "bring", "spring", "fling", "sting"]),
+      sun: new Set(["run", "fun", "gun", "done", "one", "won", "bun", "pun", "none", "son"]),
+      boat: new Set(["coat", "float", "goat", "throat", "note", "wrote", "vote", "quote"]),
+      cold: new Set(["bold", "gold", "hold", "sold", "told", "old", "fold"]),
+      red: new Set(["bed", "fed", "led", "said", "head", "bread", "read", "shed", "dead"]),
+      car: new Set(["far", "bar", "star", "jar", "tar", "scar"]),
+      hot: new Set(["pot", "not", "got", "lot", "shot", "spot", "knot", "dot", "plot"])
+    };
+
+    const targetSet = RHYME_MAP[targetWord];
+    const matching = [];
+    for (const opt of options) {
+      if (opt.isSubmitOrNext) continue;
+      const optWord = (opt.label || opt.text || opt.value || "").trim().toLowerCase();
+      if (!optWord) continue;
+      if (targetSet && targetSet.has(optWord)) {
+        matching.push(opt);
+      } else if (targetWord.length >= 3 && optWord.length >= 3 && targetWord.slice(-3) === optWord.slice(-3) && targetWord !== optWord) {
+        matching.push(opt);
+      }
+    }
+    return matching.length > 0 ? matching : null;
+  }
+
+  function solveExplicitInstruction(text, options) {
+    if (!text) return null;
+    const m = text.match(/(?:select|choose|pick)\s+["'“]([^"'”]+)["'”]/i);
+    if (m) {
+      const targetLabel = m[1].trim().toLowerCase();
+      const match = options.find(o => !o.isSubmitOrNext && (o.label || "").trim().toLowerCase() === targetLabel);
+      if (match) return [match];
+    }
+    return null;
+  }
+
+  const mathAns = solveArithmetic(questionText);
+  if (mathAns !== null) {
+    const matchingChoice = controls.find((c) => !c.isSubmitOrNext && ((c.label || "").trim() === mathAns || (c.value || "").trim() === mathAns));
+    if (matchingChoice) {
+      return {
+        canHandle: true,
+        type: "choice",
+        targetControl: matchingChoice,
+        confidence: 0.99,
+        reason: `Resolved arithmetic check (${questionText}) -> ${mathAns}`,
+      };
+    }
+    const textControl = controls.find((c) => (c.role === "textbox" || c.tag === "input") && !c.isSubmitOrNext);
+    if (textControl) {
+      return {
+        canHandle: true,
+        type: "text",
+        textValue: mathAns,
+        targetControl: textControl,
+        confidence: 0.99,
+        reason: `Resolved arithmetic check (${questionText}) -> ${mathAns}`,
+      };
+    }
+  }
+
+  const rhymeMatches = solveRhyme(questionText, controls);
+  if (rhymeMatches && rhymeMatches.length > 0) {
+    return {
+      canHandle: true,
+      type: rhymeMatches.length > 1 ? "multi_choice" : "choice",
+      targetControls: rhymeMatches,
+      targetControl: rhymeMatches[0],
+      confidence: 0.99,
+      reason: `Resolved rhyming attention check: ${rhymeMatches.map(m => m.label).join(", ")}`,
+    };
+  }
+
+  const explicitMatches = solveExplicitInstruction(questionText, controls);
+  if (explicitMatches && explicitMatches.length > 0) {
+    return {
+      canHandle: true,
+      type: explicitMatches.length > 1 ? "multi_choice" : "choice",
+      targetControls: explicitMatches,
+      targetControl: explicitMatches[0],
+      confidence: 0.99,
+      reason: `Resolved explicit instruction attention check: ${explicitMatches.map(m => m.label).join(", ")}`,
+    };
   }
 
   // Check for open-ended text areas requiring System 2
@@ -677,9 +1039,33 @@ export function evaluateControls(harvested, persona = MEI_LIN_CHEN_PERSONA) {
       } else if (/\b(birth\s*year|year\s*(?:of\s*)?birth|year.*born|born\s*in)\b/i.test(qLower)) {
         textValue = String(persona.date_of_birth?.year || 1994);
         reason = "Matched birth year demographic";
+      } else if (/\b(member\s*2|spouse|husband)\b/i.test(qLower) && /\b(age|how old)\b/i.test(qLower)) {
+        textValue = "34";
+        reason = "Matched household member 2 (spouse) age: 34";
+      } else if (/\b(member\s*3|child|son)\b/i.test(qLower) && /\b(age|how old)\b/i.test(qLower)) {
+        textValue = "3";
+        reason = "Matched household member 3 (son) age: 3";
       } else if (/\b(age|how old)\b/i.test(qLower)) {
         textValue = String(persona.age || 32);
         reason = "Matched age demographic";
+      } else if (/\b(birth\s*day|day.*born|day\s*of\s*(?:the\s*)?month)\b/i.test(qLower)) {
+        textValue = String(persona.date_of_birth?.day || 10);
+        reason = "Matched birth day demographic";
+      } else if (/\b(how many people.*household|household.*(?:size|how many|number)|people live in your household|total.*household)\b/i.test(qLower)) {
+        textValue = "3";
+        reason = "Matched household size: 3 (self, spouse, 1 child)";
+      } else if (/\b(how many children|children.*(?:in|under)|number of children)\b/i.test(qLower)) {
+        textValue = "1";
+        reason = "Matched children count: 1 (son, age 3)";
+      } else if (/\b(how many adults|adults.*household|number of adults)\b/i.test(qLower)) {
+        textValue = "2";
+        reason = "Matched adults count: 2 (self and spouse)";
+      } else if (/(?:how many\s*(?:leisure\s*)?vacations|number of\s*(?:leisure\s*)?vacations|vacations.*(?:take|per year))/i.test(qLower)) {
+        textValue = "3";
+        reason = "Matched vacation frequency: 3 vacations/year";
+      } else if (/(?:total\s*days.*(?:vacation|trip|travel)|how many\s*(?:total\s*)?days|days.*(?:vacation|trip|travel))/i.test(qLower)) {
+        textValue = "14";
+        reason = "Matched vacation total days: 14 days/year";
       }
       if (textValue) {
         return {
@@ -775,7 +1161,7 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
   const apiKey = options.apiKey || process.env.UNSLOTH_STUDIO_API_KEY || "sk-unsloth-3806b3388ca2c8f925f8a2a7aeb78445";
   const systemOneModel = options.systemOneModel || process.env.UNSLOTH_SYSTEMONE_MODEL || "laya-english";
   const chatModel = normalizeUnslothModel(options.chatModel || options.model || process.env.UNSLOTH_CHAT_MODEL || "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF");
-  const timeoutMs = options.timeoutMs ?? 15000;
+  const timeoutMs = options.timeoutMs ?? 60000;
 
   const questionKey = Object.keys(questions)[0] || "q";
   const q = questions[questionKey] || {};
@@ -811,7 +1197,15 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
   const optionLabels = Object.keys(q.criteria || {});
   const numberedOptions = optionLabels.map((lbl, i) => `${i + 1}. ${lbl}`).join("\n");
 
-  const systemPrompt = `You are a survey respondent. Given the profile below, answer the question by selecting the BEST matching option number. Reply with ONLY the option number (e.g. "3"), nothing else. No explanation.\n\nProfile: ${state}`;
+  const systemPrompt = `You are a survey respondent participating in online research to earn rewards.
+Answer questions realistically matching the respondent profile below.
+CRITICAL RULES:
+1. Identify and avoid attention traps / fake items (e.g. impossible claims like performing for 500k people, non-existent towns, fake shows).
+2. For normal activity / product / media lists, pick realistic, common items that fit an active adult.
+3. NEVER choose "None of the above" or "Not applicable" if there are realistic options available.
+4. Reply with ONLY the option number (e.g. "2"), nothing else. No explanation.
+
+Profile: ${state}`;
   const userPrompt = `Question: ${q.instructions || "Select the best option."}\n\nOptions:\n${numberedOptions}\n\nReply with ONLY the number of the best option.`;
 
   const chatRes = await fetch(`${baseUrl}/v1/chat/completions`, {

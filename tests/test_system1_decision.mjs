@@ -273,6 +273,70 @@ console.log("[test] 5. evaluateControls processes harvested controls and yields 
   assert.equal(evalAmbiguous.canHandle, false);
   assert.equal(evalAmbiguous.reason, "needs_system2");
 
+  // Arithmetic attention checks (e.g. "What is 3 + 4?")
+  const mathControls = [
+    { role: "link", label: "What is 3 + 4?", tag: "a", isSubmitOrNext: false },
+    { role: "textbox", tag: "input", type: "text", label: "", selector: "#math-input", isSubmitOrNext: false },
+    { role: "button", label: "Continue", tag: "button", isSubmitOrNext: true },
+  ];
+  const evalMath = evaluateControls({ controls: mathControls, question: "Please correct the errors below" });
+  assert.equal(evalMath.canHandle, true);
+  assert.equal(evalMath.type, "text");
+  assert.equal(evalMath.textValue, "7");
+  assert.equal(evalMath.confidence, 0.99);
+
+  // TV / Media question
+  const tvControls = [
+    { role: "checkbox", label: "NCIS", isSubmitOrNext: false },
+    { role: "checkbox", label: "FBI", isSubmitOrNext: false },
+    { role: "checkbox", label: "None of the above", isSubmitOrNext: false },
+    { role: "button", label: "Continue", isSubmitOrNext: true },
+  ];
+  const evalTv = evaluateControls({ controls: tvControls, question: "Which of the following shows have you watched an episode of in the last week?" });
+  assert.equal(evalTv.canHandle, true);
+  assert.equal(evalTv.type, "choice");
+  assert.equal(evalTv.targetControl.label, "NCIS");
+
+  // Streaming service question
+  const streamControls = [
+    { role: "radio", label: "Netflix", isSubmitOrNext: false },
+    { role: "radio", label: "None", isSubmitOrNext: false },
+  ];
+  const evalStream = evaluateControls({ controls: streamControls, question: "Which video streaming service do you use?" });
+  assert.equal(evalStream.canHandle, true);
+  assert.equal(evalStream.targetControl.label, "Netflix");
+
+  // Rhyming attention checks (e.g. "Which of the following two words rhyme with 'cry'?")
+  const rhymeControls = [
+    { role: "checkbox", label: "Bake", isSubmitOrNext: false },
+    { role: "checkbox", label: "Buy", isSubmitOrNext: false },
+    { role: "checkbox", label: "Shy", isSubmitOrNext: false },
+    { role: "checkbox", label: "Make", isSubmitOrNext: false },
+    { role: "checkbox", label: "Fake", isSubmitOrNext: false },
+    { role: "button", label: "Next page", isSubmitOrNext: true },
+  ];
+  const evalRhyme = evaluateControls({
+    controls: rhymeControls,
+    question: "Which of the following two words rhyme with \"cry\"? Please select the two words that apply.",
+  });
+  assert.equal(evalRhyme.canHandle, true);
+  assert.equal(evalRhyme.type, "multi_choice");
+  assert.equal(evalRhyme.targetControls.length, 2);
+  assert.deepEqual(evalRhyme.targetControls.map((c) => c.label), ["Buy", "Shy"]);
+
+  // Explicit instruction attention checks (e.g. "Please select 'Somewhat agree' to verify attention")
+  const instructControls = [
+    { role: "radio", label: "Strongly agree", isSubmitOrNext: false },
+    { role: "radio", label: "Somewhat agree", isSubmitOrNext: false },
+    { role: "radio", label: "Disagree", isSubmitOrNext: false },
+  ];
+  const evalInstruct = evaluateControls({
+    controls: instructControls,
+    question: "To verify you are paying attention, please choose 'Somewhat agree'.",
+  });
+  assert.equal(evalInstruct.canHandle, true);
+  assert.equal(evalInstruct.targetControl.label, "Somewhat agree");
+
   // Empty controls or no actionable options
   assert.equal(evaluateControls([]).canHandle, false);
   assert.equal(evaluateControls({ controls: [] }).canHandle, false);
@@ -280,3 +344,5 @@ console.log("[test] 5. evaluateControls processes harvested controls and yields 
 }
 
 console.log("PASS: test_system1_decision");
+
+

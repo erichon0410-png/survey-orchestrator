@@ -157,6 +157,47 @@ console.log("[test] 2. tryExecuteFastPath handles question without next button")
   assert.equal(pressedEvents.length, 1, "only 1 click when no next button is present");
 }
 
+console.log("[test] 2b. tryExecuteFastPath handles multi-option selection (rhyming attention check)");
+{
+  const mouseEvents = [];
+  const sleepCalls = [];
+
+  const mockSend = async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      return {
+        result: {
+          value: {
+            question: "Which of the following two words rhyme with \"cry\"? Please select the two words that apply.",
+            controls: [
+              { role: "checkbox", label: "Bake", x: 100, y: 150, w: 20, h: 20, isSubmitOrNext: false },
+              { role: "checkbox", label: "Buy", x: 100, y: 200, w: 20, h: 20, isSubmitOrNext: false },
+              { role: "checkbox", label: "Shy", x: 100, y: 250, w: 20, h: 20, isSubmitOrNext: false },
+              { role: "checkbox", label: "Make", x: 100, y: 300, w: 20, h: 20, isSubmitOrNext: false },
+              { role: "button", label: "Next", x: 200, y: 380, w: 80, h: 30, isSubmitOrNext: true },
+            ],
+          },
+        },
+      };
+    }
+    if (method === "Input.dispatchMouseEvent") {
+      mouseEvents.push(params);
+      return {};
+    }
+    return {};
+  };
+
+  const result = await tryExecuteFastPath(3013, {
+    send: mockSend,
+    sleepFn: async (ms) => sleepCalls.push(ms),
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.optionClicked, "Buy, Shy");
+  assert.equal(result.nextClicked, true);
+  const pressedEvents = mouseEvents.filter((e) => e.type === "mousePressed");
+  assert.equal(pressedEvents.length, 3, "2 checkbox clicks + 1 next button click");
+}
+
 console.log("[test] 3. tryExecuteFastPath falls back cleanly to System 2 on textarea / complex controls");
 {
   let clickDispatched = false;

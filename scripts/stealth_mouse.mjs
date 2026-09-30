@@ -384,7 +384,14 @@ export async function stealthClick(send, target, options = {}) {
     const sel = typeof target === "string" ? target : target?.selector;
     await send("Runtime.evaluate", {
       expression: `(() => {
-        let el = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
+        let el = null;
+        const selStr = ${JSON.stringify(sel || "")};
+        if (selStr) {
+          try { el = document.querySelector(selStr); } catch {}
+          if (!el && selStr.startsWith(".")) {
+            try { el = document.querySelector("." + selStr.replace(/^\./, "").trim().split(/\s+/).join(".")); } catch {}
+          }
+        }
         if (!el && ${destPt.x} > 0 && ${destPt.y} > 0) {
           el = document.elementFromPoint(${destPt.x}, ${destPt.y});
         }
@@ -401,9 +408,16 @@ export async function stealthClick(send, target, options = {}) {
             el.click();
           }
           if (el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) {
-            el.checked = true;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+            const parentLabel = el.closest('label') || (el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null);
+            if (parentLabel && typeof parentLabel.click === 'function') {
+              parentLabel.click();
+            } else {
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "checked")?.set;
+              if (nativeSetter) nativeSetter.call(el, true);
+              else el.checked = true;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
           }
         }
       })()`,

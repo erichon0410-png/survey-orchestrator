@@ -85,17 +85,17 @@ export function getHarvestScript() {
     if (role === "hidden") continue;
 
     const label = getLabel(el);
-    const checked = !!el.checked;
+    const checked = !!el.checked || el.getAttribute("aria-checked") === "true";
     const value = el.value || "";
     const disabled = el.disabled || el.getAttribute("aria-disabled") === "true";
     const clsStr = typeof el.className === "string" ? el.className.trim() : (typeof el.className?.baseVal === "string" ? el.className.baseVal.trim() : "");
-    const isBack = /back|prev(ious)?/i.test(label) || /back|prev/i.test(clsStr) || label === "<";
+    const isBack = /\\b(back|prev|previous)\\b/i.test(label) || /\\b(back|prev)\\b/i.test(clsStr) || label === "<" || /back/i.test(el.id || "");
     const isSubmitOrNext = !isBack && (
       /next|continue|submit|proceed|forward|done|finish/i.test(label) ||
-      /^[➔→>»▶\s]+$/.test(label) ||
+      /^[➔→>»▶\\s]+$/.test(label) ||
       /next|continue|arrow|submit|forward/i.test(clsStr) ||
       /next|continue|submit|forward/i.test(el.id || "") ||
-      type === "submit"
+      (type === "submit" && !isBack)
     );
 
     if (disabled) {
@@ -115,7 +115,7 @@ export function getHarvestScript() {
           checked,
           value,
           disabled: true,
-          selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
+          selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
           isSubmitOrNext: true,
         });
       }
@@ -139,7 +139,7 @@ export function getHarvestScript() {
       isCenter: true,
       checked,
       value,
-      selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
+      selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
       isSubmitOrNext,
     });
   }
@@ -158,14 +158,23 @@ export function getHarvestScript() {
   // Extract visible question groups (e.g. SurveyGizmo, Qualtrics, Decipher, HTML radio groups)
   const questionGroups = [];
   const radioMap = new Map();
-  const allRadios = Array.from(document.querySelectorAll("input[type=radio]"));
+  const allRadios = Array.from(document.querySelectorAll('input[type=radio], [role="radio"]'));
   for (const r of allRadios) {
-    const name = r.name || "unnamed";
+    const isAria = r.getAttribute("role") === "radio";
+    const gridRow = r.closest("tr, [role='row'], .cf-grid__row, .cf-desktop-grid__answer, [class*='grid__answer'], [class*='grid-row'], [class*='table-layout__row']");
+    const container = gridRow || r.closest("fieldset, .sg-question, .QuestionOuter, .cf-question, [class*='question-container'], [class*='question-wrapper']") || r.closest("[role='radiogroup']") || r.closest("form > div");
+    const name = (gridRow && r.id ? r.id.replace(/_[0-9]+_control$/, "") : (r.name || (container && container.id ? container.id : (isAria ? (r.id ? r.id.replace(/_[0-9]+_control$/, "") : "aria_radiogroup") : "unnamed"))));
     if (!radioMap.has(name)) {
-      const container = r.closest("fieldset, .sg-question, .QuestionOuter, [class*='question-container'], [class*='question-wrapper']") || r.closest("form > div");
       const isVis = container ? (window.getComputedStyle(container).display !== "none" && window.getComputedStyle(container).visibility !== "hidden" && container.getBoundingClientRect().height > 10) : true;
-      const titleEl = container ? container.querySelector("legend, .sg-question-title, [class*='question-title'], h1, h2, h3, h4") : null;
-      let title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : "").replace(/This question is required\\.?/gi, "").trim().replace(/\\s+/g, " ");
+      let title = "";
+      if (gridRow) {
+        const rowTitleEl = gridRow.querySelector('.cf-table-layout__row-header, .cf-grid__row-text, td:first-child, th, [class*="row-header"], [class*="row-text"]') || gridRow;
+        title = (rowTitleEl ? (rowTitleEl.innerText || rowTitleEl.textContent || "") : "").split('\\n')[0].replace(/Please select an answer\\.?/gi, "").trim().replace(/\\s+/g, " ");
+      }
+      if (!title) {
+        const titleEl = container ? (container.querySelector("legend, .sg-question-title, .cf-question__text, .cf-question__title, [class*='question-title'], [class*='question-text'], h1, h2, h3, h4") || container.closest(".cf-question, fieldset, form > div")?.querySelector("legend, .sg-question-title, .cf-question__text, .cf-question__title, [class*='question-title'], [class*='question-text'], h1, h2, h3, h4")) : null;
+        title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : "").replace(/This question is required\\.?/gi, "").trim().replace(/\\s+/g, " ");
+      }
       radioMap.set(name, {
         name,
         title,
@@ -175,10 +184,17 @@ export function getHarvestScript() {
       });
     }
     const grp = radioMap.get(name);
-    if (r.checked) grp.hasChecked = true;
-    const lbl = (r.id ? document.querySelector('label[for="' + CSS.escape(r.id) + '"]') : null) || r.labels?.[0] || r.closest('label');
-    const labelTxt = (lbl ? (lbl.innerText || lbl.textContent || "") : r.value || "").trim();
-    const sel = r.id ? "#" + CSS.escape(r.id) : (lbl ? 'label[for="' + CSS.escape(r.id) + '"]' : 'input[name="' + CSS.escape(r.name) + '"][value="' + CSS.escape(r.value) + '"]');
+    const checked = !!r.checked || r.getAttribute("aria-checked") === "true";
+    if (checked) grp.hasChecked = true;
+    const lbl = (r.id ? document.querySelector('label[for="' + CSS.escape(r.id) + '"]') : null) || r.labels?.[0] || r.closest('label, .cf-list__item, li') || r;
+    let labelTxt = getLabel(r) || (r.closest(".cf-list__item, li, label, .cf-radio-wrapper")?.innerText || lbl?.innerText || lbl?.textContent || r.value || "").trim();
+    if (gridRow && grp.title && r.getAttribute("aria-label")) {
+      const stripped = r.getAttribute("aria-label").replace(grp.title, "").trim();
+      if (stripped && stripped.length < labelTxt.length) {
+        labelTxt = stripped;
+      }
+    }
+    const sel = r.id ? "#" + CSS.escape(r.id) : (lbl && lbl.getAttribute && lbl.getAttribute('for') ? 'label[for="' + CSS.escape(r.id) + '"]' : (r.name ? 'input[name="' + CSS.escape(r.name) + '"][value="' + CSS.escape(r.value) + '"]' : ""));
     let rect = r.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
       const parent = lbl || r.parentElement;
@@ -188,9 +204,9 @@ export function getHarvestScript() {
       role: "radio",
       type: "radio",
       id: r.id,
-      name: r.name,
-      value: r.value,
-      checked: r.checked,
+      name: r.name || name,
+      value: r.value || "",
+      checked,
       label: labelTxt,
       selector: sel,
       x: Math.round(rect.left + rect.width / 2),
@@ -209,7 +225,7 @@ export function getHarvestScript() {
   }
 
   // Include standalone visible text inputs (e.g. Age, Zip code, DOB)
-  const allTextInputs = Array.from(document.querySelectorAll("input[type=text], input:not([type])")).filter(inp => {
+  const allTextInputs = Array.from(document.querySelectorAll("input[type=text], input[type=number], input[type=tel], input:not([type])")).filter(inp => {
     const s = window.getComputedStyle(inp);
     if (s.display === "none" || s.visibility === "hidden" || inp.disabled) return false;
     if (inp.name && inp.name.includes("other")) return false;
@@ -217,10 +233,10 @@ export function getHarvestScript() {
   });
 
   for (const inp of allTextInputs) {
-    const container = inp.closest("fieldset, .sg-question, .QuestionOuter, [class*='question-container'], [class*='question-wrapper']") || inp.closest("form > div");
+    const container = inp.closest("fieldset, .sg-question, .QuestionOuter, .cf-question, [class*='question-container'], [class*='question-wrapper']") || inp.closest("form > div");
     const isVis = container ? (window.getComputedStyle(container).display !== "none" && window.getComputedStyle(container).visibility !== "hidden" && container.getBoundingClientRect().height > 10) : true;
     if (!isVis) continue;
-    const titleEl = container ? container.querySelector("legend, .sg-question-title, [class*='question-title'], h1, h2, h3, h4, label") : null;
+    const titleEl = container ? container.querySelector("legend, .sg-question-title, .cf-question__text, .cf-question__title, [class*='question-title'], [class*='question-text'], h1, h2, h3, h4, label") : null;
     let title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : "").replace(/This question is required\\.?/gi, "").trim().replace(/\\s+/g, " ");
     let rect = inp.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
@@ -388,7 +404,9 @@ export async function harvestControls(send) {
   const raw = res?.result?.value;
   const controls = Array.isArray(raw) ? raw : (raw?.controls || []);
   const question = typeof raw?.question === "string" ? raw.question : "";
-  const nextButton = controls.find((c) => c.isSubmitOrNext) || null;
+  const nextButton = controls.find((c) => c.isSubmitOrNext && !c.disabled && !/(back|prev|previous)/i.test(c.label || "") && (c.role === "button" || c.tag === "button" || c.tag === "input")) ||
+                     controls.find((c) => c.isSubmitOrNext && !/(back|prev|previous)/i.test(c.label || "") && (c.role === "button" || c.tag === "button" || c.tag === "input")) ||
+                     controls.find((c) => c.isSubmitOrNext && !/(back|prev|previous)/i.test(c.label || "")) || null;
   const radios = controls.filter((c) => c.role === "radio");
   const checkboxes = controls.filter((c) => c.role === "checkbox");
   const inputs = controls.filter((c) => c.role === "textbox");

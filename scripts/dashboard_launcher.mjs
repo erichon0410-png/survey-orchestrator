@@ -1,4 +1,5 @@
 // scripts/dashboard_launcher.mjs — Autonomous Dashboard Survey Launcher
+import path from "node:path";
 import { stealthClick } from "./stealth_mouse.mjs";
 
 export function isDashboardPage(target) {
@@ -185,4 +186,15 @@ export async function autoLaunchDashboardSurvey(port, options = {}) {
   } catch (err) {
     return { launched: false, reason: err.message || String(err) };
   }
+}
+
+if (process.argv[1] && path.basename(process.argv[1]) === "dashboard_launcher.mjs") {
+  const port = parseInt(process.argv[2] || "3014", 10);
+  autoLaunchDashboardSurvey(port).then((res) => {
+    console.log(JSON.stringify(res, null, 2));
+    process.exit(res.launched ? 0 : 1);
+  }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

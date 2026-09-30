@@ -139,6 +139,37 @@ export async function withCDPSession(port, options = {}, fn) {
   }
 }
 
+export async function clickAndVerifyControl(send, ctrl, options = {}) {
+  await stealthClick(send, ctrl, { ...options, isIframe: options.isIframe });
+  if (ctrl && (ctrl.role === "checkbox" || ctrl.role === "radio" || ctrl.type === "checkbox" || ctrl.type === "radio")) {
+    try {
+      const verifyRes = await send("Runtime.evaluate", {
+        expression: `(() => {
+          const sel = ${JSON.stringify(ctrl.selector)};
+          let el = sel ? document.querySelector(sel) : null;
+          if (!el && ${JSON.stringify(ctrl.x)} > 0) el = document.elementFromPoint(${ctrl.x}, ${ctrl.y});
+          if (!el) return { checked: false, notFound: true };
+          const isChecked = !!el.checked || el.getAttribute("aria-checked") === "true" || el.classList.contains("cf-selected");
+          if (!isChecked) {
+            const lblId = el.getAttribute("aria-labelledby");
+            const textEl = lblId ? document.getElementById(lblId) : (el.closest('.cf-checkbox-answer, .cf-radio-answer, .cf-list__item, label')?.querySelector('.cf-checkbox-answer__text, .cf-radio-answer__text, [class*="text"], label') || el.closest('label'));
+            if (textEl) {
+              textEl.click();
+              const recheck = !!el.checked || el.getAttribute("aria-checked") === "true" || el.classList.contains("cf-selected");
+              return { checked: recheck, escalated: true };
+            }
+          }
+          return { checked: isChecked, escalated: false };
+        })()`,
+        returnByValue: true,
+      });
+      if (verifyRes?.result?.value?.escalated) {
+        console.log(`[fastpath] Post-click verification: escalated phantom click to text label for "${ctrl.label}" (checked: ${verifyRes.result.value.checked})`);
+      }
+    } catch {}
+  }
+}
+
 /**
  * Runs fast-path decision and human-paced execution on an active CDP session send function.
  *
@@ -251,7 +282,7 @@ async function runFastPath(send, options = {}) {
             returnByValue: true,
           });
         } else {
-          await stealthClick(send, groupDecision.targetControl, { ...options, isIframe: options.isIframe });
+          await clickAndVerifyControl(send, groupDecision.targetControl, { ...options, isIframe: options.isIframe });
         }
         questionsAnswered++;
         answeredLabels.push(groupDecision.type === "text" ? groupDecision.textValue : groupDecision.targetControl.label);
@@ -318,9 +349,16 @@ async function runFastPath(send, options = {}) {
   }
 
   if (!decision || !decision.canHandle) {
-    // Handle interstitial/transition pages that have ONLY a next/submit button (ignoring passive links/headings)
+    // Handle interstitial/transition pages that have ONLY a next/submit button (ignoring passive links/headings/containers)
     const nextBtn = harvested.nextButton;
-    const actionableCount = harvested.controls?.filter((c) => !c.isSubmitOrNext && c.role !== "link" && c.role !== "heading").length || 0;
+    const actionableCount = harvested.controls?.filter((c) =>
+      !c.isSubmitOrNext &&
+      !/\b(back|prev|previous)\b/i.test(c.label || "") &&
+      (c.role === "radio" || c.type === "radio" || c.role === "checkbox" || c.type === "checkbox" ||
+       c.role === "textbox" || c.tag === "textarea" || c.role === "combobox" || c.role === "option" ||
+       (c.tag === "input" && c.type !== "hidden") ||
+       ((c.role === "button" || c.tag === "button") && !c.isSubmitOrNext))
+    ).length || 0;
     if (nextBtn && actionableCount === 0) {
       // Pure interstitial page — just click Continue/Next after reading dwell
       const interstitialDwell = 2000 + Math.floor(Math.random() * 2000);
@@ -368,6 +406,8 @@ async function runFastPath(send, options = {}) {
     await sleepFn(schedule.preClickDwellMs);
   }
 
+  let totalPacedMs = schedule.readingMs + schedule.preClickDwellMs;
+
   // 6. Dispatch action: text entry or stealth click
   if (decision.type === "text") {
     const textVal = decision.textValue;
@@ -410,24 +450,41 @@ async function runFastPath(send, options = {}) {
       returnByValue: true,
     });
   } else {
-    console.log(`[fastpath] Clicking option: "${targetControl.label}" at (${targetControl.x}, ${targetControl.y})`);
-    await stealthClick(send, targetControl, { ...options, isIframe: options.isIframe });
+    const targetsToClick = Array.isArray(decision.targetControls) && decision.targetControls.length > 0
+      ? decision.targetControls
+      : [targetControl];
+
+    for (let ci = 0; ci < targetsToClick.length; ci++) {
+      const ctrl = targetsToClick[ci];
+      const isCheckbox = ctrl.role === "checkbox" || ctrl.type === "checkbox";
+      if (isCheckbox && ctrl.checked) {
+        console.log(`[fastpath] Checkbox "${ctrl.label}" already checked, skipping click.`);
+      } else {
+        console.log(`[fastpath] Clicking option (${ci + 1}/${targetsToClick.length}): "${ctrl.label}" at (${ctrl.x}, ${ctrl.y})`);
+        await clickAndVerifyControl(send, ctrl, { ...options, isIframe: options.isIframe });
+        if (ci < targetsToClick.length - 1) {
+          const interOptionDwell = 350 + Math.floor(Math.random() * 400);
+          await sleepFn(interOptionDwell);
+          totalPacedMs += interOptionDwell;
+        }
+      }
+    }
   }
 
   // 7. Post-click dwell
   if (schedule.postClickDwellMs > 0) {
     await sleepFn(schedule.postClickDwellMs);
+    totalPacedMs += schedule.postClickDwellMs;
   }
 
   // 8. If next button present and submission allowed, advance page
   let nextClicked = false;
-  let totalPacedMs = schedule.readingMs + schedule.preClickDwellMs + schedule.postClickDwellMs;
 
   let nextButton = harvested.nextButton;
-  if (!nextButton && options.allowSubmit !== false) {
+  if ((!nextButton || nextButton.disabled) && options.allowSubmit !== false) {
     try {
       const refreshed = await harvestControls(send);
-      if (refreshed?.nextButton) {
+      if (refreshed?.nextButton && !refreshed.nextButton.disabled) {
         nextButton = refreshed.nextButton;
       }
     } catch {}
@@ -451,12 +508,16 @@ async function runFastPath(send, options = {}) {
     }
   }
 
+  const clickedLabels = Array.isArray(decision.targetControls) && decision.targetControls.length > 0
+    ? decision.targetControls.map((c) => c.label).join(", ")
+    : (targetControl.label || "");
+
   return {
     handled: true,
     action: "fastpath_completed",
     decision,
     pacedMs: totalPacedMs,
-    optionClicked: targetControl.label,
+    optionClicked: clickedLabels,
     nextClicked,
     dwellMilestones: {
       readingMs: schedule.readingMs,
@@ -495,4 +556,15 @@ export async function tryExecuteFastPath(port, options = {}) {
       reason: `cdp_connection_failed: ${err.message || String(err)}`,
     };
   }
+}
+
+if (process.argv[1] && path.basename(process.argv[1]) === "system1_runner.mjs") {
+  const port = parseInt(process.argv[2] || "3014", 10);
+  tryExecuteFastPath(port).then((res) => {
+    console.log(JSON.stringify(res, null, 2));
+    process.exit(res.handled ? 0 : 1);
+  }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
