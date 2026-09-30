@@ -110,11 +110,31 @@ export async function runAutonomousLoop(port = 3014, options = {}) {
         repeatSignatureCount++;
         log(`Current page unchanged: "${currentSignature.slice(0, 60)}..." (attempt ${repeatSignatureCount})`);
 
-        if (repeatSignatureCount >= 4) {
+        if (repeatSignatureCount === 4) {
           log(`Stall detected on question "${currentSignature.slice(0, 60)}...". Invoking modal unstuck & recovery.`);
           await detectAndDismissStallModals(port);
-          repeatSignatureCount = 1; // Reset counter after recovery attempt
-          await new Promise((r) => setTimeout(r, 3000));
+          await new Promise((r) => setTimeout(r, 2000));
+        } else if (repeatSignatureCount >= 7) {
+          log(`Dead page / persistent stall detected (attempt ${repeatSignatureCount}). Recovering tab...`);
+          try {
+            const listRes = await fetch(`http://127.0.0.1:${port}/cdp/json`);
+            const allTargets = (await listRes.json()).filter(t => t.type === "page" || !t.type);
+            if (allTargets.length > 1 && surveyTarget.id) {
+              log(`Closing stalled survey tab: ${surveyTarget.url}`);
+              await fetch(`http://127.0.0.1:${port}/cdp/json/close/${surveyTarget.id}`);
+            } else {
+              log(`Navigating stalled single tab back to Swagbucks surveys dashboard...`);
+              await withCDPSession(port, { target: surveyTarget }, async (send) => {
+                await send("Page.navigate", { url: "https://www.swagbucks.com/surveys" });
+              });
+            }
+          } catch (recErr) {
+            log(`Tab recovery failed: ${recErr.message}`);
+          }
+          lastPageSignature = "";
+          repeatSignatureCount = 0;
+          await new Promise((r) => setTimeout(r, 4000));
+          continue;
         }
       } else {
         lastPageSignature = currentSignature;
