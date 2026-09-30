@@ -59,25 +59,24 @@ export function findDashboardAction(controls = []) {
   // 2. Survey Cards (Priority: launch available survey)
   const surveyCards = controls.filter((c) => {
     const cls = String(c.className || "");
-    const lbl = String(c.label || c.text || "");
+    const lbl = String(c.label || c.text || "").trim();
+    if (c.y !== undefined && c.y < 120) return false;
+    if (/header|nav|toggler|tertiary|bonus/i.test(cls)) return false;
+    if (/& get|\bearn\b.*&|daily goal|survey bonus/i.test(lbl)) return false;
+
     const isCard = /card_card|survey-card|surveyCard|survey-item/i.test(cls);
-    const hasSbOrMin = /\b(\d+\s*sb|\d+\s*pts|\d+\s*min)\b/i.test(lbl);
-    return isCard || hasSbOrMin;
+    const hasBothMinAndSb = /\b\d+\s*min\b/i.test(lbl) && /\b\d+\s*(?:sb|pts)\b/i.test(lbl);
+    return isCard || hasBothMinAndSb;
   });
   if (surveyCards.length > 0) {
-    const viableCards = surveyCards.filter((c) => {
-      const lbl = String(c.label || c.text || "");
-      return !/bonus|toggler/i.test(c.className || "") && !/survey bonus/i.test(lbl);
-    });
-    const pool = viableCards.length > 0 ? viableCards : surveyCards;
-    pool.sort((a, b) => {
+    surveyCards.sort((a, b) => {
       const getSb = (c) => {
         const m = String(c.label || c.text || "").match(/(\d+)\s*(?:sb|pts)/i);
         return m ? parseInt(m[1], 10) : 0;
       };
       return getSb(b) - getSb(a);
     });
-    const chosen = pool[0];
+    const chosen = surveyCards[0];
     return {
       type: "survey_card",
       target: chosen,
