@@ -101,12 +101,15 @@ export function getHarvestScript() {
           type,
           x: Math.round(rect.left + rect.width / 2),
           y: Math.round(rect.top + rect.height / 2),
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
           w: Math.round(rect.width),
           h: Math.round(rect.height),
+          isCenter: true,
           checked,
           value,
           disabled: true,
-          selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(Boolean).join(".") : "")),
+          selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
           isSubmitOrNext: true,
         });
       }
@@ -123,11 +126,14 @@ export function getHarvestScript() {
       type,
       x,
       y,
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
       w: Math.round(rect.width),
       h: Math.round(rect.height),
+      isCenter: true,
       checked,
       value,
-      selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : ""),
+      selector: el.id ? "#" + el.id : (el.name ? tag + '[name="' + el.name + '"]' : (clsStr ? "." + clsStr.trim().split(/\s+/).filter(c => c && !c.includes(":")).join(".") : "")),
       isSubmitOrNext,
     });
   }
@@ -143,9 +149,138 @@ export function getHarvestScript() {
     return "";
   }
 
+  // Extract visible question groups (e.g. SurveyGizmo, Qualtrics, Decipher, HTML radio groups)
+  const questionGroups = [];
+  const radioMap = new Map();
+  const allRadios = Array.from(document.querySelectorAll("input[type=radio]"));
+  for (const r of allRadios) {
+    const name = r.name || "unnamed";
+    if (!radioMap.has(name)) {
+      const container = r.closest("fieldset, .sg-question, .QuestionOuter, [class*='question-container'], [class*='question-wrapper']") || r.closest("form > div");
+      const isVis = container ? (window.getComputedStyle(container).display !== "none" && window.getComputedStyle(container).visibility !== "hidden" && container.getBoundingClientRect().height > 10) : true;
+      const titleEl = container ? container.querySelector("legend, .sg-question-title, [class*='question-title'], h1, h2, h3, h4") : null;
+      let title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : "").replace(/This question is required\\.?/gi, "").trim().replace(/\\s+/g, " ");
+      radioMap.set(name, {
+        name,
+        title,
+        isVisible: isVis,
+        hasChecked: false,
+        options: []
+      });
+    }
+    const grp = radioMap.get(name);
+    if (r.checked) grp.hasChecked = true;
+    const lbl = (r.id ? document.querySelector('label[for="' + CSS.escape(r.id) + '"]') : null) || r.labels?.[0] || r.closest('label');
+    const labelTxt = (lbl ? (lbl.innerText || lbl.textContent || "") : r.value || "").trim();
+    const sel = r.id ? "#" + CSS.escape(r.id) : (lbl ? 'label[for="' + CSS.escape(r.id) + '"]' : 'input[name="' + CSS.escape(r.name) + '"][value="' + CSS.escape(r.value) + '"]');
+    let rect = r.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      const parent = lbl || r.parentElement;
+      if (parent) rect = parent.getBoundingClientRect();
+    }
+    grp.options.push({
+      role: "radio",
+      type: "radio",
+      id: r.id,
+      name: r.name,
+      value: r.value,
+      checked: r.checked,
+      label: labelTxt,
+      selector: sel,
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+      isCenter: true,
+      isSubmitOrNext: false,
+    });
+  }
+
+  for (const grp of radioMap.values()) {
+    if (grp.isVisible && grp.options.length > 0) {
+      questionGroups.push(grp);
+    }
+  }
+
+  // Include standalone visible text inputs (e.g. Age, Zip code, DOB)
+  const allTextInputs = Array.from(document.querySelectorAll("input[type=text], input:not([type])")).filter(inp => {
+    const s = window.getComputedStyle(inp);
+    if (s.display === "none" || s.visibility === "hidden" || inp.disabled) return false;
+    if (inp.name && inp.name.includes("other")) return false;
+    return true;
+  });
+
+  for (const inp of allTextInputs) {
+    const container = inp.closest("fieldset, .sg-question, .QuestionOuter, [class*='question-container'], [class*='question-wrapper']") || inp.closest("form > div");
+    const isVis = container ? (window.getComputedStyle(container).display !== "none" && window.getComputedStyle(container).visibility !== "hidden" && container.getBoundingClientRect().height > 10) : true;
+    if (!isVis) continue;
+    const titleEl = container ? container.querySelector("legend, .sg-question-title, [class*='question-title'], h1, h2, h3, h4, label") : null;
+    let title = (titleEl ? (titleEl.innerText || titleEl.textContent || "") : "").replace(/This question is required\\.?/gi, "").trim().replace(/\\s+/g, " ");
+    let rect = inp.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      const parent = inp.parentElement;
+      if (parent) rect = parent.getBoundingClientRect();
+    }
+    const sel = inp.id ? "#" + CSS.escape(inp.id) : (inp.name ? 'input[name="' + CSS.escape(inp.name) + '"]' : "");
+    questionGroups.push({
+      name: inp.name || inp.id || "text_input",
+      title: title || extractQuestion(),
+      isVisible: true,
+      hasChecked: !!inp.value,
+      type: "text",
+      options: [{
+        role: "textbox",
+        tag: "input",
+        type: "text",
+        id: inp.id,
+        name: inp.name,
+        value: inp.value || "",
+        label: title || "Text input",
+        selector: sel,
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        isCenter: true,
+        isSubmitOrNext: false,
+      }],
+    });
+  }
+
+  const consentCheckboxes = [];
+  const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+  for (const cb of allCheckboxes) {
+    const parent = cb.closest("label, div, p");
+    const parentText = (parent ? (parent.innerText || parent.textContent || "") : (cb.name || cb.id || "")).trim();
+    if (/consent|terms|privacy|agree|certify|confirm/i.test(parentText)) {
+      const lbl = (cb.id ? document.querySelector('label[for="' + CSS.escape(cb.id) + '"]') : null) || cb.labels?.[0] || parent;
+      let rect = cb.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        if (lbl) rect = lbl.getBoundingClientRect();
+      }
+      consentCheckboxes.push({
+        role: "checkbox",
+        type: "checkbox",
+        id: cb.id,
+        name: cb.name,
+        checked: cb.checked,
+        label: parentText.slice(0, 120),
+        selector: cb.id ? "#" + CSS.escape(cb.id) : (cb.name ? 'input[name="' + CSS.escape(cb.name) + '"]' : ""),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        isCenter: true,
+        isSubmitOrNext: false,
+      });
+    }
+  }
+
   return {
     question: extractQuestion(),
-    controls: visibleControls
+    controls: visibleControls,
+    questionGroups,
+    consentCheckboxes
   };
 })()`;
 }
@@ -199,6 +334,8 @@ export async function harvestControls(send) {
   const radios = controls.filter((c) => c.role === "radio");
   const checkboxes = controls.filter((c) => c.role === "checkbox");
   const inputs = controls.filter((c) => c.role === "textbox");
+  const questionGroups = Array.isArray(raw?.questionGroups) ? raw.questionGroups : [];
+  const consentCheckboxes = Array.isArray(raw?.consentCheckboxes) ? raw.consentCheckboxes : [];
   const table = formatControlsTable(controls);
 
   return {
@@ -208,6 +345,8 @@ export async function harvestControls(send) {
     radios,
     checkboxes,
     inputs,
+    questionGroups,
+    consentCheckboxes,
     totalCount: controls.length,
     table,
   };

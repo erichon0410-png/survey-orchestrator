@@ -369,6 +369,29 @@ export function decideChoice(questionText, options, persona = MEI_LIN_CHEN_PERSO
     }
   }
 
+  // 9. POLITICS & CANDIDATES
+  const isPoliticsQ = /\b(political\s*party|which\s*party|party\s*affiliation|politics|leaning|economy.*party|trust\s*more)\b/i.test(qLower);
+  const isCandidateQ = /\b(vote\s*for|support\s*for|election|governor|senat(?:e|or)|president|trump)\b/i.test(qLower);
+  const hasPartyOpts = normOpts.some((o) => /republican|democrat/i.test(o.label));
+
+  if (isPoliticsQ || isCandidateQ || hasPartyOpts) {
+    if (/\btrump\b/i.test(qLower) && normOpts.some((o) => /favorable|unfavorable/i.test(o.label))) {
+      const fav = normOpts.find((o) => /somewhat favorable/i.test(o.label)) ||
+                  normOpts.find((o) => /^favorable$/i.test(o.label)) ||
+                  normOpts.find((o) => /very favorable/i.test(o.label));
+      if (fav) {
+        return makeDecision(fav.label, fav.index, 0.95, `Matched Trump favorability: ${fav.label}`, "choice");
+      }
+    }
+
+    if (persona.politics?.registration === "Republican" || /republican/i.test(persona.politics?.leaning || "")) {
+      const repOpt = normOpts.find((o) => /\brepublican\b/i.test(o.label) || /\(r\)/i.test(o.label));
+      if (repOpt) {
+        return makeDecision(repOpt.label, repOpt.index, 0.95, `Matched Republican candidate/party: ${repOpt.label}`, "choice");
+      }
+    }
+  }
+
   return null;
 }
 
@@ -754,25 +777,37 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
   const chatModel = normalizeUnslothModel(options.chatModel || options.model || process.env.UNSLOTH_CHAT_MODEL || "ukisai/Swift-1.5-Qwen3.8-27B-GSQ-RCO-GGUF");
   const timeoutMs = options.timeoutMs ?? 15000;
 
-  // Try /v1/systemone (Laya ~100ms ultra-fast classifier) first
-  const systemOneUrl = options.endpoint || `${baseUrl}/v1/systemone`;
-  try {
-    const res = await fetch(systemOneUrl, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: systemOneModel, state, questions }),
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 4000)),
-    });
-    if (res.ok) {
-      return await res.json();
+  const questionKey = Object.keys(questions)[0] || "q";
+  const q = questions[questionKey] || {};
+  const instructions = String(q.instructions || "").toLowerCase();
+  const isAttentionCheck = /\b(paying attention|attention check|select the (number|color|word|animal)|not a (color|animal|number)|trap question)\b/i.test(instructions);
+
+  // Try /v1/systemone (Laya ~100ms ultra-fast classifier) first if NOT an attention check
+  if (!isAttentionCheck && !options.skipSystemOne) {
+    const systemOneUrl = options.endpoint || `${baseUrl}/v1/systemone`;
+    try {
+      const res = await fetch(systemOneUrl, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: systemOneModel, state, questions }),
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 4000)),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const ans = data?.answers?.[questionKey];
+        const prob = ans?.probabilities?.[ans?.choice] ?? ans?.confidence ?? 0;
+        const numCriteria = Object.keys(q.criteria || {}).length || 4;
+        const threshold = Math.max(0.20, 0.85 / numCriteria);
+        if (ans?.choice && prob >= threshold) {
+          return data;
+        }
+      }
+    } catch (err) {
+      // Fall through to chat completions fallback
     }
-  } catch (err) {
-    // Fall through to chat completions fallback
   }
 
-  // Fallback: use /v1/chat/completions with ukisai/Swift-Qwen3.8-27b
-  const questionKey = Object.keys(questions)[0] || "q";
-  const q = questions[questionKey];
+  // Fallback / Attention Check: use /v1/chat/completions with ukisai/Swift-Qwen3.8-27b
   const optionLabels = Object.keys(q.criteria || {});
   const numberedOptions = optionLabels.map((lbl, i) => `${i + 1}. ${lbl}`).join("\n");
 
@@ -788,8 +823,8 @@ export async function queryUnslothSystemOne(state, questions, options = {}) {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: 350,
-      temperature: 0.2,
+      max_tokens: 1024,
+      temperature: 0.1,
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -906,7 +941,7 @@ export async function evaluateControlsNeural(harvested, persona = MEI_LIN_CHEN_P
     }
 
     const choiceProb = answer.probabilities?.[answer.choice] ?? answer.confidence ?? 0.85;
-    const minProb = options.minProbability ?? Math.max(0.25, 1.1 / actionable.length);
+    const minProb = options.minProbability ?? Math.max(0.20, 0.85 / actionable.length);
     if (choiceProb < minProb) {
       return { canHandle: false, reason: "laya_low_confidence", probability: choiceProb };
     }

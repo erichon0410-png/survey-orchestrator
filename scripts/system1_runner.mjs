@@ -40,10 +40,10 @@ export function selectSurveyTarget(targets, options = {}) {
         const u = new URL(t.url);
         const host = u.hostname.toLowerCase();
         const path = u.pathname.replace(/\/+$/, "").toLowerCase();
-        if (host.includes("swagbucks.com") && (path === "" || path.startsWith("/surveys") || path.startsWith("/dashboard"))) {
+        if (host.includes("swagbucks.com") && !path.includes("prescreener") && (path === "" || path === "/surveys" || path === "/dashboard")) {
           return false;
         }
-        if (host.includes("surveyjunkie.com") && (path === "" || path.startsWith("/surveys") || path.startsWith("/dashboard"))) {
+        if (host.includes("surveyjunkie.com") && !path.includes("prescreener") && (path === "" || path === "/surveys" || path === "/dashboard")) {
           return false;
         }
         const low = (t.url || "").toLowerCase();
@@ -168,9 +168,6 @@ async function runFastPath(send, options = {}) {
     };
   }
 
-  // 2. Fast-path decision evaluation (Tier 1: local heuristic <0.01ms)
-  let decision = evaluateControls(harvested, persona);
-
   // If local heuristic cannot handle it and neural Laya is enabled (Tier 2: Unsloth Studio Laya ~100ms)
   const enableNeuralLaya = options.useNeuralLaya ?? (
     options.fetchFn != null ||
@@ -178,6 +175,127 @@ async function runFastPath(send, options = {}) {
     process.env.ENABLE_NEURAL_LAYA === "true" ||
     (!options.send && process.env.SURVEY_NEURAL_LAYA !== "0")
   );
+
+  // Multi-Question Page Fast-Path:
+  // If multiple question groups exist on the page (e.g. SurveyGizmo, Qualtrics, Decipher),
+  // sequentially evaluate and answer all visible, unanswered groups before submitting.
+  if (Array.isArray(harvested.questionGroups) && harvested.questionGroups.length > 1) {
+    const unanswered = harvested.questionGroups.filter(g => g.isVisible !== false && !g.hasChecked);
+    console.log(`[fastpath] Detected ${harvested.questionGroups.length} question groups, ${unanswered.length} unanswered`);
+    let totalPacedMs = 0;
+    let questionsAnswered = 0;
+    const answeredLabels = [];
+
+    for (const grp of unanswered) {
+      const miniHarvest = {
+        question: grp.title,
+        controls: grp.options,
+        radios: grp.options.filter(o => o.role === "radio" || o.type === "radio"),
+        checkboxes: grp.options.filter(o => o.role === "checkbox" || o.type === "checkbox"),
+      };
+
+      let groupDecision = evaluateControls(miniHarvest, persona);
+      if ((!groupDecision || !groupDecision.canHandle) && enableNeuralLaya) {
+        groupDecision = await evaluateControlsNeural(miniHarvest, persona, options);
+      }
+
+      if (groupDecision && groupDecision.canHandle && groupDecision.targetControl) {
+        const schedule = getPacingSchedule(grp.title, grp.options, options.pacingConfig || {});
+        const readDwell = Math.min(schedule.readingMs, 3000);
+        if (readDwell > 0) {
+          await sleepFn(readDwell);
+          totalPacedMs += readDwell;
+        }
+        const preClickDwell = Math.min(schedule.preClickDwellMs, 1000);
+        if (preClickDwell > 0) {
+          await sleepFn(preClickDwell);
+          totalPacedMs += preClickDwell;
+        }
+
+        console.log(`[fastpath] Answering multi-question ${questionsAnswered + 1}/${unanswered.length}: "${grp.title.slice(0, 50)}..." -> "${groupDecision.type === 'text' ? groupDecision.textValue : groupDecision.targetControl.label}"`);
+        if (groupDecision.type === "text") {
+          const textVal = groupDecision.textValue;
+          const sel = groupDecision.targetControl.selector;
+          await send("Runtime.evaluate", {
+            expression: `(() => {
+              let inp = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
+              if (!inp && ${JSON.stringify(groupDecision.targetControl.x)} > 0) inp = document.elementFromPoint(${groupDecision.targetControl.x}, ${groupDecision.targetControl.y});
+              if (!inp) inp = document.querySelector('input[type=text], input:not([type=hidden]):not([type=radio]):not([type=checkbox]), textarea');
+              if (!inp) return false;
+              inp.focus();
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+              if (nativeSetter) nativeSetter.call(inp, ${JSON.stringify(textVal)});
+              else inp.value = ${JSON.stringify(textVal)};
+              const k = Object.keys(inp).find(x => x.startsWith('__reactProps') || x.startsWith('__reactEventHandlers'));
+              if (k && inp[k] && typeof inp[k].onChange === 'function') {
+                try { inp[k].onChange({ target: inp, currentTarget: inp, persist: () => {}, preventDefault: () => {}, stopPropagation: () => {} }); } catch {}
+              }
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+              inp.dispatchEvent(new Event("change", { bubbles: true }));
+              return true;
+            })()`,
+            returnByValue: true,
+          });
+        } else {
+          await stealthClick(send, groupDecision.targetControl, { ...options, isIframe: options.isIframe });
+        }
+        questionsAnswered++;
+        answeredLabels.push(groupDecision.type === "text" ? groupDecision.textValue : groupDecision.targetControl.label);
+
+        const postDwell = 500 + Math.floor(Math.random() * 400);
+        await sleepFn(postDwell);
+        totalPacedMs += postDwell;
+      }
+    }
+
+    if (unanswered.length > 0 && questionsAnswered === 0) {
+      return { handled: false, reason: "needs_system2" };
+    }
+
+    // Auto-check any unselected consent/GDPR checkboxes
+    if (Array.isArray(harvested.consentCheckboxes)) {
+      for (const cb of harvested.consentCheckboxes) {
+        if (!cb.checked) {
+          await sleepFn(400);
+          await stealthClick(send, cb, { ...options, isIframe: options.isIframe });
+          totalPacedMs += 400;
+        }
+      }
+    }
+
+    // Click next button if present
+    let nextButton = harvested.nextButton;
+    if (!nextButton && options.allowSubmit !== false) {
+      try {
+        const refreshed = await harvestControls(send);
+        if (refreshed?.nextButton) nextButton = refreshed.nextButton;
+      } catch {}
+    }
+
+    let nextClicked = false;
+    if (nextButton && options.allowSubmit !== false) {
+      const preSubmitDwell = 1500 + Math.floor(Math.random() * 1000);
+      await sleepFn(preSubmitDwell);
+      totalPacedMs += preSubmitDwell;
+      await stealthClick(send, nextButton, { ...options, isIframe: options.isIframe });
+      nextClicked = true;
+    }
+
+    return {
+      handled: true,
+      action: "multi_question_completed",
+      decision: { type: "multi_question", count: questionsAnswered },
+      questionsAnswered,
+      answeredLabels,
+      optionClicked: answeredLabels.join(", ") || (nextButton ? nextButton.label : "next"),
+      nextClicked,
+      pacedMs: totalPacedMs,
+    };
+  }
+
+  // 2. Fast-path decision evaluation (Tier 1: local heuristic <0.01ms)
+  let decision = evaluateControls(harvested, persona);
+
   if ((!decision || !decision.canHandle) && enableNeuralLaya) {
     const neuralRes = await evaluateControlsNeural(harvested, persona, options);
     if (neuralRes && neuralRes.canHandle) {
@@ -186,9 +304,9 @@ async function runFastPath(send, options = {}) {
   }
 
   if (!decision || !decision.canHandle) {
-    // Handle interstitial/transition pages that have ONLY a next/submit button
+    // Handle interstitial/transition pages that have ONLY a next/submit button (ignoring passive links/headings)
     const nextBtn = harvested.nextButton;
-    const actionableCount = harvested.controls?.filter((c) => !c.isSubmitOrNext).length || 0;
+    const actionableCount = harvested.controls?.filter((c) => !c.isSubmitOrNext && c.role !== "link" && c.role !== "heading").length || 0;
     if (nextBtn && actionableCount === 0) {
       // Pure interstitial page — just click Continue/Next after reading dwell
       const interstitialDwell = 2000 + Math.floor(Math.random() * 2000);
@@ -225,6 +343,7 @@ async function runFastPath(send, options = {}) {
 
   const schedule = getPacingSchedule(questionText, candidateOptions, options.pacingConfig || {});
 
+  console.log(`[fastpath] Single question: "${questionText.slice(0, 50)}..." -> "${targetControl.label}" (reading: ${schedule.readingMs}ms)`);
   // 4. Reading delay
   if (schedule.readingMs > 0) {
     await sleepFn(schedule.readingMs);
@@ -239,6 +358,7 @@ async function runFastPath(send, options = {}) {
   if (decision.type === "text") {
     const textVal = decision.textValue;
     const sel = targetControl.selector;
+    console.log(`[fastpath] Entering text: "${textVal}"`);
     await send("Runtime.evaluate", {
       expression: `(() => {
         let inp = ${sel ? `document.querySelector(${JSON.stringify(sel)})` : `null`};
@@ -261,6 +381,7 @@ async function runFastPath(send, options = {}) {
       returnByValue: true,
     });
   } else {
+    console.log(`[fastpath] Clicking option: "${targetControl.label}" at (${targetControl.x}, ${targetControl.y})`);
     await stealthClick(send, targetControl, { ...options, isIframe: options.isIframe });
   }
 
@@ -288,6 +409,7 @@ async function runFastPath(send, options = {}) {
       await sleepFn(schedule.preSubmitDwellMs);
       totalPacedMs += schedule.preSubmitDwellMs;
     }
+    console.log(`[fastpath] Clicking next button: "${nextButton.label}"`);
     await stealthClick(send, nextButton, { ...options, isIframe: options.isIframe });
     nextClicked = true;
   }

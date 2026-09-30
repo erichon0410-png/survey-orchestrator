@@ -122,6 +122,30 @@ console.log("[test] 2. decideChoice selects correct demographic options");
     "$100,000+",
   ]);
   assert.equal(incRes2?.choice, "$100,000+");
+
+  // Politics (Party, Trump favorability, candidate)
+  const polRes = decideChoice("Which political party do you trust more with the economy?", [
+    "Democratic Party",
+    "Republican Party",
+    "Neither",
+  ]);
+  assert.equal(polRes?.choice, "Republican Party");
+
+  const trumpRes = decideChoice("Do you have a favorable or unfavorable opinion of President Trump?", [
+    "Very favorable",
+    "Somewhat favorable",
+    "Somewhat unfavorable",
+    "Very unfavorable",
+  ]);
+  assert.equal(trumpRes?.choice, "Somewhat favorable");
+
+  const govRes = decideChoice("Who would you support for Ohio governor?", [
+    "Democrat Amy Acton",
+    "Democrat Allison Russo",
+    "Republican Vivek Ramaswamy",
+    "Undecided",
+  ]);
+  assert.equal(govRes?.choice, "Republican Vivek Ramaswamy");
 }
 
 console.log("[test] 3. decideNoul handles binary/boolean questions accurately");

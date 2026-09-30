@@ -23,8 +23,8 @@ function cubicBezier(p0, p1, p2, p3, t) {
  * Calculates a target coordinate dispersed inside the inner bounding box.
  */
 export function calculateJitter(box, jitterFactor = 0.4) {
-  const cx = box.x + box.w / 2;
-  const cy = box.y + box.h / 2;
+  const cx = box.isCenter ? box.x : (box.x + box.w / 2);
+  const cy = box.isCenter ? box.y : (box.y + box.h / 2);
   const maxOffsetX = (box.w * jitterFactor) / 2;
   const maxOffsetY = (box.h * jitterFactor) / 2;
 
@@ -222,44 +222,98 @@ export async function stealthMove(send, targetPos, options = {}) {
  * Executes a full human-like click with Bézier trajectory, hover dwell, hold, and settle.
  */
 export async function stealthClick(send, target, options = {}) {
+  try { await send("Page.bringToFront"); } catch {}
   let targetBox;
 
-  if (typeof target === "string") {
-    const res = await send("Runtime.evaluate", {
-      expression: `(() => {
-        let el = document.querySelector(${JSON.stringify(target)});
-        if (!el) return null;
-        let r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0 || r.left < 0 || r.top < 0) {
-          const parent = el.closest('.clickableCell, .fir-choice, label') || el.parentElement;
-          if (parent) {
-            const pr = parent.getBoundingClientRect();
-            if (pr.width > 0 && pr.height > 0 && pr.left >= 0 && pr.top >= 0) {
-              el = parent;
-              r = pr;
-            }
-          }
-        }
-        el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
-        r = el.getBoundingClientRect();
-        return { x: r.left, y: r.top, w: r.width, h: r.height, tag: el.tagName, text: el.innerText ? el.innerText.slice(0, 50) : "" };
-      })()`,
-      returnByValue: true,
-    });
+  const targetSelector = typeof target === "string" ? target : (target?.selector || null);
+  const targetLabel = typeof target === "object" ? (target?.label || target?.text || null) : null;
+  const targetX = typeof target === "object" && typeof target?.x === "number" ? target.x : null;
+  const targetY = typeof target === "object" && typeof target?.y === "number" ? target.y : null;
 
-    const info = res?.result?.value;
-    if (!info) throw new Error(`Element not found for selector: ${target}`);
-    if (info.w === 0 && info.h === 0) throw new Error(`Element has 0 dimensions: ${target}`);
-    targetBox = info;
-  } else if (target && typeof target.x === "number" && typeof target.y === "number") {
-    targetBox = {
-      x: target.x,
-      y: target.y,
-      w: typeof target.w === "number" ? target.w : 0,
-      h: typeof target.h === "number" ? target.h : 0,
-    };
-  } else {
-    throw new Error("Invalid target: must be a selector string or {x, y} coordinate object");
+  if (targetSelector || targetLabel || (targetX !== null && targetY !== null && typeof target === "object")) {
+    try {
+      const res = await send("Runtime.evaluate", {
+        expression: `(() => {
+          let el = null;
+          const sel = ${JSON.stringify(targetSelector)};
+          const lbl = ${JSON.stringify(targetLabel)};
+          const tgtX = ${JSON.stringify(targetX)};
+          const tgtY = ${JSON.stringify(targetY)};
+
+          if (sel) {
+            try { el = document.querySelector(sel); } catch {}
+          }
+          if (!el && typeof tgtX === 'number' && typeof tgtY === 'number' && tgtX > 0 && tgtY > 0) {
+            if (tgtY > window.innerHeight) {
+              window.scrollBy(0, tgtY - window.innerHeight / 2);
+            }
+            el = document.elementFromPoint(tgtX, Math.min(window.innerHeight - 20, Math.max(20, tgtY)));
+          }
+          if (!el && lbl) {
+            const cleanLbl = lbl.trim().toLowerCase();
+            const candidates = Array.from(document.querySelectorAll('button, a, label, input, [role="button"], [role="radio"], [role="checkbox"], .clickableCell, .fir-choice'));
+            el = candidates.find(c => {
+              const t = (c.innerText || c.textContent || c.value || c.getAttribute('aria-label') || '').trim().toLowerCase();
+              return t === cleanLbl || (cleanLbl.length > 3 && t.includes(cleanLbl));
+            }) || null;
+          }
+
+          if (el) {
+            let r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0 || r.left < 0 || r.top < 0) {
+              const labelEl = (el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null) || el.labels?.[0];
+              const parent = labelEl || el.closest('.clickableCell, .fir-choice, label') || el.parentElement;
+              if (parent) {
+                const pr = parent.getBoundingClientRect();
+                if (pr.width > 0 && pr.height > 0) {
+                  el = parent;
+                  r = pr;
+                }
+              }
+            }
+            el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+            r = el.getBoundingClientRect();
+            return {
+              x: r.left,
+              y: r.top,
+              w: r.width,
+              h: r.height,
+              tag: el.tagName,
+              text: el.innerText ? el.innerText.slice(0, 50) : "",
+              isCenter: false,
+            };
+          }
+          return null;
+        })()`,
+        returnByValue: true,
+      });
+
+      const info = res?.result?.value;
+      if (info && typeof info.x === "number" && typeof info.y === "number") {
+        if (info.w === 0 && info.h === 0) {
+          throw new Error(`Element has 0 dimensions: ${targetSelector || targetLabel || "target"}`);
+        }
+        targetBox = info;
+      }
+    } catch (err) {
+      if (typeof target === "string") throw err;
+    }
+  }
+
+  if (!targetBox) {
+    if (typeof target === "string") {
+      throw new Error(`Element not found for selector: ${target}`);
+    } else if (target && typeof target.x === "number" && typeof target.y === "number") {
+      targetBox = {
+        x: target.x,
+        y: target.y,
+        w: typeof target.w === "number" ? target.w : 0,
+        h: typeof target.h === "number" ? target.h : 0,
+        isCenter: target.isCenter ?? (target.w > 0 && target.h > 0 && target.role !== undefined),
+      };
+    } else {
+      throw new Error("Invalid target: must be a selector string or {x, y} coordinate object");
+    }
   }
 
   const destPt = calculateJitter(targetBox, options.jitterFactor ?? 0.4);

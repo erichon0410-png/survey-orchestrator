@@ -26,7 +26,7 @@ export function findDashboardAction(controls = []) {
   // 1. Active Modal Start Buttons
   const startModalBtn = controls.find((c) => {
     const lbl = String(c.label || c.text || "").trim();
-    return /^(start survey|take survey|try this survey|start|take this survey)$/i.test(lbl) ||
+    return /^(start survey|take survey|try this survey|start|take this survey|start next survey)$/i.test(lbl) ||
            /start-survey-cta/i.test(c.className || "");
   });
   if (startModalBtn) {
@@ -37,7 +37,28 @@ export function findDashboardAction(controls = []) {
     };
   }
 
-  // 2. Refresh CTA ("Check for New Surveys")
+  // 2. Survey Cards (Priority: launch available survey)
+  const surveyCards = controls.filter((c) => {
+    const cls = String(c.className || "");
+    const lbl = String(c.label || c.text || "");
+    const isCard = /card_card|survey-card|surveyCard|survey-item/i.test(cls);
+    const hasSbOrMin = /\b(\d+\s*sb|\d+\s*pts|\d+\s*min)\b/i.test(lbl);
+    return isCard || hasSbOrMin;
+  });
+  if (surveyCards.length > 0) {
+    const viableCards = surveyCards.filter((c) => {
+      const lbl = String(c.label || c.text || "");
+      return !/bonus|toggler/i.test(c.className || "") && !/survey bonus/i.test(lbl);
+    });
+    const chosen = viableCards[0] || surveyCards[0];
+    return {
+      type: "survey_card",
+      target: chosen,
+      label: chosen.label || chosen.text || "Survey Card",
+    };
+  }
+
+  // 3. Refresh CTA ("Check for New Surveys")
   const refreshCta = controls.find((c) => {
     const lbl = String(c.label || c.text || "").trim();
     return /check for new surveys|refresh surveys/i.test(lbl) ||
@@ -48,22 +69,6 @@ export function findDashboardAction(controls = []) {
       type: "refresh_cta",
       target: refreshCta,
       label: refreshCta.label || refreshCta.text || "Check for New Surveys",
-    };
-  }
-
-  // 3. Survey Cards
-  const surveyCard = controls.find((c) => {
-    const cls = String(c.className || "");
-    const lbl = String(c.label || c.text || "");
-    const isCard = /card_card|survey-card|surveyCard|survey-item/i.test(cls);
-    const hasSbOrMin = /\b(\d+\s*sb|\d+\s*pts|\d+\s*min)\b/i.test(lbl);
-    return isCard || hasSbOrMin;
-  });
-  if (surveyCard) {
-    return {
-      type: "survey_card",
-      target: surveyCard,
-      label: surveyCard.label || surveyCard.text || "Survey Card",
     };
   }
 
@@ -91,15 +96,29 @@ export async function autoLaunchDashboardSurvey(port, options = {}) {
 
     const ws = new WebSocketClass(wsUrl);
     await new Promise((resolve, reject) => {
-      ws.once("open", resolve);
-      ws.once("error", reject);
+      if (ws.once) {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      } else {
+        ws.addEventListener("open", resolve, { once: true });
+        ws.addEventListener("error", reject, { once: true });
+      }
     });
 
     let id = 0;
     const send = options.send || ((m, p = {}) => new Promise((resolve) => {
       const cur = ++id;
-      const h = (d) => { const msg = JSON.parse(d); if (msg.id === cur) { ws.off("message", h); resolve(msg.result); } };
-      ws.on("message", h);
+      const h = (d) => {
+        const raw = typeof d === "string" ? d : d?.data || "{}";
+        const msg = JSON.parse(raw);
+        if (msg.id === cur) {
+          if (ws.off) ws.off("message", h);
+          else ws.removeEventListener("message", h);
+          resolve(msg.result);
+        }
+      };
+      if (ws.on) ws.on("message", h);
+      else ws.addEventListener("message", h);
       ws.send(JSON.stringify({ id: cur, method: m, params: p }));
     }));
 

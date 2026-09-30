@@ -167,6 +167,7 @@ try {
       } else {
         targetSpec = selector;
       }
+      try { await send("Page.bringToFront"); } catch {}
       await injectVirtualCursor(send);
       const clickRes = await stealthClick(send, targetSpec);
       result = { ok: true, url: target.url, ...clickRes };
