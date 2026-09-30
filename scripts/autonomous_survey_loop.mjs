@@ -211,6 +211,11 @@ export async function runAutonomousLoop(port = 3014, options = {}) {
       const launchRes = await autoLaunchDashboardSurvey(port);
       if (launchRes && launchRes.launched) {
         log(`Launched survey via ${launchRes.action} ("${launchRes.targetLabel}")`);
+        if (launchRes.action === "dismiss_modal") {
+          log("Dismissed dashboard modal overlay. Re-checking dashboard to launch survey...");
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
         for (let w = 0; w < 6; w++) {
           await new Promise((r) => setTimeout(r, 2000));
           if (await isSurveyOpen(port)) {

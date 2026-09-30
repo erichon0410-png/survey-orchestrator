@@ -24,6 +24,24 @@ export function isDashboardPage(target) {
 export function findDashboardAction(controls = []) {
   if (!Array.isArray(controls) || controls.length === 0) return null;
 
+  // 0. Active Modal Dismiss / Close Buttons (e.g. Swagbucks survey feedback modal, backdrop blockers)
+  const modalCloseBtn = controls.find((c) => {
+    const lbl = String(c.label || c.text || "").trim();
+    const cls = String(c.className || "");
+    return (
+      (/^close$/i.test(lbl) && /modal|dialog|cta|feedback|button/i.test(cls)) ||
+      /feedback-modal_cta/i.test(cls) ||
+      (lbl === "Close" && c.w > 0 && c.h > 0)
+    );
+  });
+  if (modalCloseBtn) {
+    return {
+      type: "dismiss_modal",
+      target: modalCloseBtn,
+      label: modalCloseBtn.label || "Close Modal",
+    };
+  }
+
   // 1. Active Modal Start Buttons
   const startModalBtn = controls.find((c) => {
     const lbl = String(c.label || c.text || "").trim();

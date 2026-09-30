@@ -12,6 +12,19 @@ assert.equal(isDashboardPage({ url: "https://www.swagbucks.com/surveys/prescreen
 assert.equal(isDashboardPage({ url: "https://entertainmentlab.github.io/surveys/123" }), false);
 assert.equal(isDashboardPage(null), false);
 
+// 1b. findDashboardAction modal dismissal priority
+{
+  const mockControls = [
+    { role: "button", label: "Close", className: "feedback-modal_cta", w: 50, h: 20, isVisible: true },
+    { role: "button", label: "Start Survey", x: 960, y: 490, isVisible: true },
+    { role: "link", label: "12 SB - 3 min", className: "card_card", x: 300, y: 400, isVisible: true },
+  ];
+  const action = findDashboardAction(mockControls);
+  assert.ok(action, "Must find action when modal close button present");
+  assert.equal(action.type, "dismiss_modal");
+  assert.equal(action.target.label, "Close");
+}
+
 // 2. findDashboardAction modal priority
 {
   const mockControls = [
