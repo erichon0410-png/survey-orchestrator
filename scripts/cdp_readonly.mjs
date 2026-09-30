@@ -150,6 +150,7 @@ export async function readContainer({
 
     let screenshot_b64 = "";
     try {
+      try { await send("Page.enable"); } catch {}
       const shot = await send("Page.captureScreenshot", { format: "png" });
       screenshot_b64 = (shot && shot.data) || "";
     } catch (e) {

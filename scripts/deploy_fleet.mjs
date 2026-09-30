@@ -15,6 +15,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const ORCH_PATH = process.env.DSH_ORCHESTRATOR || path.join(os.homedir(), ".dsh", "plugins", "dsh-survey-orchestrator", "lib", "orchestrator.js");
 const { FLEET, deployAgent } = await import(ORCH_PATH);
+import fs from "node:fs";
+import { execSync, spawn } from "node:child_process";
+
+// Ensure bsk_relay is running so container browser extensions can bridge to bsk daemon
+try {
+  const p = execSync("pgrep -f 'scripts/bsk_relay.mjs' || true", { encoding: "utf-8" }).trim();
+  if (!p) {
+    const relayScript = path.join(ROOT, "scripts", "bsk_relay.mjs");
+    if (fs.existsSync(relayScript)) {
+      const child = spawn("node", [relayScript], { detached: true, stdio: "ignore" });
+      child.unref();
+      console.log(`[bsk_relay] Auto-started bsk relay daemon (PID ${child.pid})`);
+    }
+  }
+} catch {}
 
 const argv = process.argv.slice(2);
 const targetPorts = [];

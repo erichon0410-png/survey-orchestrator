@@ -12,4 +12,30 @@ assert.ok(promptContent.includes("ALWAYS use `await mouseClick"), "Prompt Rule 3
 // Must ban element.click
 assert.ok(!promptContent.includes("first try via Runtime.evaluate — find the element by selector/text and call `.click()`"), "Prompt must not suggest calling .click() first");
 
-console.log("PASS survey_agent_prompt.txt complies with trusted mouse requirements");
+// Must use observe action instead of snapshot as primary inspection
+assert.ok(promptContent.includes('browser_inspect({ action: "observe"'), "Prompt must mandate observe action");
+assert.ok(!promptContent.includes('browser_inspect({ action: "snapshot"'), "Prompt must not mandate snapshot action as primary inspection");
+
+// Must not require mandatory double-snapshot before clicking Next
+assert.ok(!promptContent.includes("CRITICAL MANDATORY SNAPSHOT"), "Prompt must not contain CRITICAL MANDATORY SNAPSHOT rule");
+assert.ok(!promptContent.includes("ALWAYS call `browser_inspect({ action: \"snapshot\""), "Prompt must not mandate double snapshot before clicking Next");
+
+// Must permit direct selectors and same-turn Next/Submit clicking
+assert.ok(promptContent.includes('button[type="submit"]') && promptContent.includes(".next-btn"), "Prompt must permit direct CSS selectors for Next/Submit");
+assert.ok(promptContent.includes("same interaction turn"), "Prompt must permit clicking Next/Submit in same interaction turn");
+
+// Prescreener and zero self-exit assertions
+assert.ok(promptContent.includes("PRESCREENER & ZERO SELF-EXIT MANDATE"), "Prompt must include PRESCREENER & ZERO SELF-EXIT MANDATE");
+assert.ok(promptContent.includes("UNDER NO CIRCUMSTANCES SHOULD THE MODEL DECIDE TO EXIT ON ITS OWN"), "Prompt must mandate that the model cannot decide to exit on its own");
+assert.ok(!promptContent.includes("If an OpinionOutpost tab or non-SurveyJunkie tab is open, close it immediately!"), "Prompt must not close non-SurveyJunkie partner tabs");
+
+// Check survey_agent.patch.yml invariants
+const patchContent = fs.readFileSync("scripts/survey_agent.patch.yml", "utf8");
+assert.ok(patchContent.includes('browser_inspect({ action: "observe" })'), "Patch must use observe action");
+assert.ok(!patchContent.includes("CRITICAL MANDATORY SNAPSHOT"), "Patch must not contain CRITICAL MANDATORY SNAPSHOT rule");
+assert.ok(patchContent.includes('button[type="submit"]'), "Patch must permit direct Next button selectors");
+assert.ok(patchContent.includes("reasoningEfforts: off"), "Patch must configure reasoningEfforts to off");
+assert.ok(patchContent.includes("PRESCREENERS & QUALIFICATION MODALS"), "Patch must include PRESCREENERS & QUALIFICATION MODALS rule");
+assert.ok(patchContent.includes("TERMINAL SCREENOUTS & COMPLETION ONLY (ZERO SELF-EXIT)"), "Patch must include ZERO SELF-EXIT rule");
+
+console.log("PASS survey_agent_prompt.txt and survey_agent.patch.yml comply with streamlined observe, fast next, and prescreener zero-self-exit rules");

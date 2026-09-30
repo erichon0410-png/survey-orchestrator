@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Boot-time / autostart bring-up for the survey fleet.
-# Idempotent + safe to run repeatedly (Startup-folder hook or manually).
-# Sequence: wait for Docker daemon -> ensure survey containers up -> start host supervisor.
-set -u
+# DISABLED: Automated fleet bringup disabled by operator.
+exit 0
 # Resolve the repo root from this script's location (<root>/scripts/) so it is portable.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR" || exit 1

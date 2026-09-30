@@ -42,6 +42,8 @@ config/survey_config.yaml.local
 .scratch_probe/
 .patch-stage/
 /scripts/_scratch/
+/archive/scratch/
+/archive/data/
 
 # OCR model data
 *.traineddata
