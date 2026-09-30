@@ -47,17 +47,23 @@ export function selectSurveyTarget(targets, options = {}) {
           return false;
         }
         const low = (t.url || "").toLowerCase();
-        if (low.includes("recaptcha") || low.includes("doubleclick") || low.includes("googlesyndication") || low.includes("service-worker")) {
+        if (low.includes("recaptcha") || low.includes("doubleclick") || low.includes("googlesyndication") ||
+            low.includes("service-worker") || low.includes("amazon") || low.includes("adsystem") ||
+            low.includes("rokt.com") || low.includes("facebook.com") || low.includes("criteo")) {
           return false;
         }
-        return low.includes("prescreener") || low.includes("survey") || low.includes("screener") || low.includes("decipher") || low.includes("qualtrics") || low.includes("samplicio") || low.includes("cloudfront") || !host.includes("swagbucks.com");
+        return low.includes("prescreener") || low.includes("survey") || low.includes("screener") ||
+               low.includes("decipher") || low.includes("qualtrics") || low.includes("samplicio") ||
+               low.includes("compassrose") || !host.includes("swagbucks.com");
       } catch {
         return false;
       }
     });
     if (surveyPages.length > 0) {
-      const iframeTarget = surveyPages.find((t) => t.type === "iframe");
-      if (iframeTarget) return iframeTarget;
+      const surveyIframe = surveyPages.find((t) => t.type === "iframe" && /(?:survey|screener|decipher|qualtrics|samplicio|compassrose)/i.test(t.url || ""));
+      if (surveyIframe) return surveyIframe;
+      const pageTargets = surveyPages.filter((t) => t.type === "page" || !t.type);
+      if (pageTargets.length > 0) return pageTargets[pageTargets.length - 1];
       return surveyPages[surveyPages.length - 1];
     }
   }
