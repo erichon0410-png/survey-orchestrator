@@ -24,25 +24,7 @@ export function isDashboardPage(target) {
 export function findDashboardAction(controls = []) {
   if (!Array.isArray(controls) || controls.length === 0) return null;
 
-  // 0. Active Modal Dismiss / Close Buttons (e.g. Swagbucks survey feedback modal, backdrop blockers)
-  const modalCloseBtn = controls.find((c) => {
-    const lbl = String(c.label || c.text || "").trim();
-    const cls = String(c.className || "");
-    return (
-      (/^close$/i.test(lbl) && /modal|dialog|cta|feedback|button/i.test(cls)) ||
-      /feedback-modal_cta/i.test(cls) ||
-      (lbl === "Close" && c.w > 0 && c.h > 0)
-    );
-  });
-  if (modalCloseBtn) {
-    return {
-      type: "dismiss_modal",
-      target: modalCloseBtn,
-      label: modalCloseBtn.label || "Close Modal",
-    };
-  }
-
-  // 1. Active Modal Start Buttons
+  // 1. Active Modal Start Buttons (Highest Priority when survey launch modal is open)
   const startModalBtn = controls.find((c) => {
     const lbl = String(c.label || c.text || "").trim();
     return /^(start survey|take survey|try this survey|start|take this survey|start next survey)$/i.test(lbl) ||
@@ -53,6 +35,24 @@ export function findDashboardAction(controls = []) {
       type: "modal_start",
       target: startModalBtn,
       label: startModalBtn.label || startModalBtn.text || "Start Survey",
+    };
+  }
+
+  // 2. Active Modal Dismiss / Close Buttons (Only when NO start button exists, e.g. feedback dialogs)
+  const modalCloseBtn = controls.find((c) => {
+    const lbl = String(c.label || c.text || "").trim();
+    const cls = String(c.className || "");
+    return (
+      (/^close$/i.test(lbl) && /modal|dialog|cta|feedback/i.test(cls)) ||
+      /feedback-modal_cta/i.test(cls) ||
+      (lbl === "Close" && c.w > 0 && c.h > 0)
+    );
+  });
+  if (modalCloseBtn) {
+    return {
+      type: "dismiss_modal",
+      target: modalCloseBtn,
+      label: modalCloseBtn.label || "Close Modal",
     };
   }
 
@@ -109,8 +109,19 @@ export async function autoLaunchDashboardSurvey(port, options = {}) {
     const res = await fetch(`http://${host}:${port}/cdp/json`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) return { launched: false, reason: "cdp_fetch_failed" };
     const targets = await res.json();
-    const dashboardTarget = targets.find((t) => t && (t.type === "page" || !t.type) && isDashboardPage(t));
-    if (!dashboardTarget) return { launched: false, reason: "not_on_dashboard" };
+    const dashboardTargets = targets.filter((t) => t && (t.type === "page" || !t.type) && isDashboardPage(t));
+    if (dashboardTargets.length === 0) return { launched: false, reason: "not_on_dashboard" };
+
+    // Prefer dashboard target that has active survey modal query params or the newest tab
+    const modalTab = dashboardTargets.find((t) => t.url && (t.url.includes("m=") || t.url.includes("s=")));
+    const dashboardTarget = modalTab || dashboardTargets[dashboardTargets.length - 1];
+
+    // Prune stale duplicate dashboard tabs
+    for (const dt of dashboardTargets) {
+      if (dt.id !== dashboardTarget.id) {
+        fetch(`http://${host}:${port}/cdp/json/close/${dt.id}`).catch(() => {});
+      }
+    }
 
     return await withCDPSession(port, { target: dashboardTarget, host }, async (send) => {
       const evalRes = await send("Runtime.evaluate", {

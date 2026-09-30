@@ -33,8 +33,9 @@ async function isSurveyOpen(port) {
     const surveyTarget = selectSurveyTarget(list);
     if (!surveyTarget || !surveyTarget.url) return false;
     const u = surveyTarget.url.toLowerCase();
-    if (u.includes("swagbucks.com/surveys") || u.includes("swagbucks.com/dashboard") ||
-        u.includes("surveyjunkie.com/surveys") || u.includes("surveyjunkie.com/dashboard")) {
+    if (!u.includes("prescreener") &&
+        (u.includes("swagbucks.com/surveys") || u.includes("swagbucks.com/dashboard") ||
+         u.includes("surveyjunkie.com/surveys") || u.includes("surveyjunkie.com/dashboard"))) {
       return false;
     }
     const isSurvey = u.includes("survey") || u.includes("screener") || u.includes("decipher") ||
